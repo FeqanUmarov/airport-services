@@ -1,0 +1,1 @@
+"""Aviation standards API module."""

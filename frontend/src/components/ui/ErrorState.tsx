@@ -1,0 +1,2 @@
+import {AlertTriangle,RotateCcw} from 'lucide-react'
+export function ErrorState({title='Məlumat yüklənmədi',description='Bir qədər sonra yenidən cəhd edin.',onRetry}:{title?:string;description?:string;onRetry?:()=>void}){return <div className="ui-error-state"><AlertTriangle/><div><h3>{title}</h3><p>{description}</p></div>{onRetry&&<button onClick={onRetry}><RotateCcw/>Yenidən yoxla</button>}</div>}
