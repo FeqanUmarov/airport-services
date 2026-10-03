@@ -1,4 +1,4 @@
-.PHONY: migration migrate downgrade migration-current migration-history create-admin create-user auth-smoke users-smoke dictionaries-smoke airports-smoke runways-smoke declared-distances-smoke standards-smoke ols-generation-smoke manual-ols-smoke ols-data-smoke ols-revisions-smoke dtm-smoke obstacles-smoke violations-smoke remaining-workflows-smoke
+.PHONY: migration migrate downgrade migration-current migration-history create-admin create-user auth-smoke users-smoke dictionaries-smoke airports-smoke runways-smoke declared-distances-smoke standards-smoke ols-generation-smoke ols-envelope-smoke ols-lankaran-reference-smoke manual-ols-smoke ols-data-smoke ols-revisions-smoke dtm-smoke obstacles-smoke violations-smoke remaining-workflows-smoke
 
 migration:
 	@test -n "$(message)" || (echo 'Usage: make migration message="describe change"' && exit 1)
@@ -47,6 +47,12 @@ standards-smoke:
 
 ols-generation-smoke:
 	docker compose exec -T api python -m tests.ols_generation_smoke
+
+ols-envelope-smoke:
+	docker compose exec -T api python -m tests.ols_envelope_smoke
+
+ols-lankaran-reference-smoke:
+	docker compose exec -T api python -m tests.ols_lankaran_reference_smoke
 
 manual-ols-smoke:
 	docker compose exec -T api python -m tests.manual_ols_smoke

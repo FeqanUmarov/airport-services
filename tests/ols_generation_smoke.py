@@ -123,37 +123,28 @@ async def main():
                     )
                 )
             )
-            inner_area = float(
-                await session.scalar(
-                    select(func.ST_Area(func.ST_Transform(OlsSurface.GEOM, 32639)))
-                    .where(
-                        OlsSurface.STANDARD_OLS_ID
-                        == ids["configs"]["INNER_HORIZONTAL"]
-                    )
-                )
-            )
-            conical_area = float(
-                await session.scalar(
-                    select(func.ST_Area(func.ST_Transform(OlsSurface.GEOM, 32639)))
-                    .where(
-                        OlsSurface.STANDARD_OLS_ID
-                        == ids["configs"]["CONICAL"]
-                    )
-                )
-            )
+            # OLS layers form one partition: no pairwise overlap, and together
+            # with the Strip they tile the Inner Horizontal racetrack and the
+            # Conical annulus (Approach/Take-off take over the cut-out parts).
+            automatic_rows=(await session.execute(select(OlsSurface.OLS_SURFACE_ID,func.ST_Transform(func.ST_Force2D(OlsSurface.GEOM),32639)).where(OlsSurface.RUN_ID==runway.RUN_ID))).all()
+            for (first_id,first_geom),(second_id,second_geom) in __import__("itertools").combinations(automatic_rows,2):
+                pair_overlap=float(await session.scalar(select(func.ST_Area(func.ST_Intersection(first_geom,second_geom)))))
+                assert pair_overlap<0.01,{"surfaces":(first_id,second_id),"overlap_m2":pair_overlap}
+            automatic_union=select(func.ST_Union(func.ST_Transform(func.ST_Force2D(OlsSurface.GEOM),32639))).where(OlsSurface.RUN_ID==ids["runway"]).scalar_subquery()
+            strip_metric=select(func.ST_Transform(RunwayStrip.GEOM,32639)).where(RunwayStrip.RUN_ID==ids["runway"]).scalar_subquery()
+            covered=func.ST_Union(automatic_union,strip_metric)
+            metric_centerline=func.ST_Transform(select(Runway.CENTERLINE_GEOM).where(Runway.RUN_ID==ids["runway"]).scalar_subquery(),32639)
+            inner_area=float(await session.scalar(select(func.ST_Area(func.ST_Intersection(covered,func.ST_Buffer(metric_centerline,4000,"quad_segs=64"))))))
+            outer_area=float(await session.scalar(select(func.ST_Area(func.ST_Intersection(covered,func.ST_Buffer(metric_centerline,6000,"quad_segs=64"))))))
             expected_inner = math.pi * 4000**2 + 2 * 4000 * threshold_distance
             expected_outer = math.pi * 6000**2 + 2 * 6000 * threshold_distance
-            assert abs(inner_area - expected_inner) / expected_inner < 0.02
-            assert (
-                abs(conical_area - (expected_outer - expected_inner))
-                / (expected_outer - expected_inner)
-                < 0.02
-            )
+            assert abs(inner_area - expected_inner) / expected_inner < 0.02, (inner_area, expected_inner)
+            assert abs(outer_area - expected_outer) / expected_outer < 0.02, (outer_area, expected_outer)
             _,second=generate(token,standard.STANDARD_ID,runway.RUN_ID); assert second["generated_count"]==7; count=await session.scalar(select(func.count(OlsSurface.OLS_SURFACE_ID)).where(OlsSurface.RUN_ID==runway.RUN_ID)); assert count==7
             automatic_revision_count=await session.scalar(select(func.count()).select_from(OlsSurfaceRevision).where(OlsSurfaceRevision.OLS_SURFACE_ID==int(second["surfaces"][0]["ols_surface_id"]))); assert automatic_revision_count==2
             archived_status=await session.scalar(select(Status.STATUS_ID).where(func.lower(Status.ENG_NAME)=="archived")); archived_id=int(second["surfaces"][0]["ols_surface_id"]); await session.execute(__import__("sqlalchemy").update(OlsSurface).where(OlsSurface.RUN_ID==runway.RUN_ID).values(STATUS_ID=archived_status)); await session.commit()
             _,reactivated=generate(token,standard.STANDARD_ID,runway.RUN_ID,replace_existing=False); assert reactivated["generated_count"]==7 and int(reactivated["surfaces"][0]["ols_surface_id"])==archived_id
-            obstacle_payload={"eng_name":"Penetrating tower","obstacle_type_id":ids["obstacle_type"],"ground_elevation_m":100,"object_height_m":60,"geometry":{"type":"Point","coordinates":[49.9,40.4]}}
+            obstacle_payload={"eng_name":"Penetrating tower","obstacle_type_id":ids["obstacle_type"],"ground_elevation_m":100,"object_height_m":60,"geometry":{"type":"Point","coordinates":[49.9,40.415]}}
             code,obstacle=call(f"/airports/{ids['airport']}/obstacles","POST",obstacle_payload,token); assert code==201; obstacle_id=int(obstacle["obstacle_id"])
             code,analysis=call(f"/obstacles/{obstacle_id}/analyze","POST",token=token); assert code==200 and analysis["has_violation"] and analysis["checked_surface_count"]>=1
             inner_violation=next(v for v in analysis["violations"] if v["surface_type"]=="INNER_HORIZONTAL"); assert abs(float(inner_violation["surface_elevation_m"])-145)<0.01 and abs(float(inner_violation["penetration_m"])-15)<0.01

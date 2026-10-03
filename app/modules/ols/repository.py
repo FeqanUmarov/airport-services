@@ -20,6 +20,12 @@ from app.modules.ols.models import (
 from app.modules.runways.models import Runway, RunwayArea, RunwayAreaType, RunwayDirection, RunwayStrip
 
 
+# Fixed-precision (snap-rounded) overlay grid in metres. It keeps repeated
+# Difference/Intersection/Union operations robust without moving any boundary
+# by a measurable amount.
+OVERLAY_GRID_M = 1e-6
+
+
 class OlsRepository:
     def __init__(self, session: AsyncSession) -> None:
         self.session = session
@@ -107,58 +113,6 @@ class OlsRepository:
             statement = statement.where(OlsSurface.RUN_DIR_ID == run_dir_id)
         return await self.session.scalar(statement)
 
-    async def projected_point(self, longitude: float, latitude: float, distance_m: float, bearing_deg: float) -> tuple[float, float]:
-        """Offset a WGS84 point in a local metric CRS.
-
-        OLS dimensions are never applied directly to angular coordinates.
-        """
-        point = func.ST_SetSRID(func.ST_MakePoint(longitude, latitude), 4326)
-        zone = int((longitude + 180) // 6) + 1
-        metric_srid = (32600 if latitude >= 0 else 32700) + zone
-        metric = func.ST_Transform(point, metric_srid)
-        radians = __import__("math").radians(bearing_deg)
-        moved = func.ST_Translate(metric, distance_m * __import__("math").sin(radians), distance_m * __import__("math").cos(radians))
-        geometry = func.ST_Transform(moved, 4326)
-        row = (
-            await self.session.execute(
-                select(func.ST_X(geometry), func.ST_Y(geometry))
-            )
-        ).one()
-        return float(row[0]), float(row[1])
-
-    async def centerline_buffer_3d(self, run_id: int, radius_m: float, elevation_m: float, inner_radius_m: float | None = None):
-        centerline = await self.session.scalar(select(Runway.CENTERLINE_GEOM).where(Runway.RUN_ID == run_id))
-        if centerline is None:
-            raise ValueError("Runway centerline is required")
-        centroid = func.ST_Centroid(centerline)
-        row = (await self.session.execute(select(func.ST_X(centroid), func.ST_Y(centroid)))).one()
-        lon, lat = float(row[0]), float(row[1])
-        zone = int((lon + 180) // 6) + 1
-        metric_srid = (32600 if lat >= 0 else 32700) + zone
-        metric_line = func.ST_Transform(centerline, metric_srid)
-        footprint = func.ST_Buffer(metric_line, radius_m, "endcap=round join=round")
-        if inner_radius_m is not None:
-            footprint = func.ST_Difference(footprint, func.ST_Buffer(metric_line, inner_radius_m, "endcap=round join=round"))
-        footprint = func.ST_Transform(footprint, 4326)
-        return func.ST_Translate(func.ST_Force3D(footprint), 0, 0, elevation_m)
-
-    async def conical_surface_3d(self, run_id: int, inner_radius_m: float, horizontal_width_m: float, inner_elevation_m: float, outer_elevation_m: float):
-        centerline = await self.session.scalar(select(Runway.CENTERLINE_GEOM).where(Runway.RUN_ID == run_id))
-        if centerline is None:
-            raise ValueError("Runway centerline is required")
-        centroid = func.ST_Centroid(centerline)
-        row = (await self.session.execute(select(func.ST_X(centroid), func.ST_Y(centroid)))).one()
-        lon, lat = float(row[0]), float(row[1])
-        zone = int((lon + 180) // 6) + 1
-        metric_srid = (32600 if lat >= 0 else 32700) + zone
-        metric_line = func.ST_Transform(centerline, metric_srid)
-        inner = func.ST_Buffer(metric_line, inner_radius_m, "endcap=round join=round")
-        outer = func.ST_Buffer(metric_line, inner_radius_m + horizontal_width_m, "endcap=round join=round")
-        outer_ring = func.ST_Translate(func.ST_Force3D(func.ST_ExteriorRing(outer)), 0, 0, outer_elevation_m)
-        inner_ring = func.ST_Reverse(func.ST_Translate(func.ST_Force3D(func.ST_ExteriorRing(inner)), 0, 0, inner_elevation_m))
-        polygon = func.ST_MakePolygon(outer_ring, array([inner_ring]))
-        return func.ST_Transform(polygon, 4326)
-
     async def active_strip(self, run_id: int):
         statement = (
             select(RunwayStrip, func.ST_AsGeoJSON(RunwayStrip.GEOM).label("geojson"))
@@ -180,90 +134,85 @@ class OlsRepository:
         )
         return (await self.session.execute(statement)).one_or_none()
 
-    async def transitional_reference_boundary(
-        self, run_id: int, approach_geometries: list[Any]
-    ) -> str:
-        """Return the real 2D exterior boundary shared by Strip and Approaches."""
-        strip = await self.session.scalar(
-            select(RunwayStrip.GEOM).where(RunwayStrip.RUN_ID == run_id)
-        )
-        if strip is None:
-            raise ValueError("Active Runway Strip geometry is required")
-        reference = func.ST_Force2D(strip)
-        for approach in approach_geometries:
-            reference = func.ST_Union(reference, func.ST_Force2D(approach))
-        boundary = func.ST_Boundary(func.ST_UnaryUnion(reference))
-        # Keep enough coordinate precision for the generated lower edge to be
-        # numerically identical to the PostGIS reference boundary after its
-        # round-trip through Python/pyproj.
-        value = await self.session.scalar(select(func.ST_AsGeoJSON(boundary, 15)))
-        if value is None:
-            raise ValueError("Strip and Approach reference boundary is empty")
-        return str(value)
+    @staticmethod
+    def _metric(value: dict[str, Any], srid: int):
+        return func.ST_SetSRID(func.ST_GeomFromGeoJSON(json.dumps(value)), srid)
 
-    async def aggregate_threshold_circles_3d(
-        self,
-        run_id: int,
-        radius_m: float,
-        elevation_m: float,
-        inner_radius_m: float | None = None,
-    ):
-        threshold_points = list(
-            (
-                await self.session.scalars(
-                    select(RunwayDirection.THRESHOLD_GEOM)
-                    .where(RunwayDirection.RUN_ID == run_id)
-                    .order_by(RunwayDirection.RUN_DIR_ID)
-                )
-            ).all()
-        )
-        if len(threshold_points) != 2:
-            raise ValueError("Exactly two runway thresholds are required")
-        threshold_collection = func.ST_Collect(*threshold_points)
-        centroid = await self.session.execute(
-            select(
-                func.ST_X(func.ST_Centroid(threshold_collection)),
-                func.ST_Y(func.ST_Centroid(threshold_collection)),
-            )
-        )
-        lon, lat = centroid.one()
-        zone = int((float(lon) + 180) // 6) + 1
-        metric_srid = (32600 if float(lat) >= 0 else 32700) + zone
-        metric_thresholds = [
-            func.ST_Transform(point, metric_srid) for point in threshold_points
-        ]
-        circles = [func.ST_Buffer(point, radius_m) for point in metric_thresholds]
-        # ArcGIS Aggregate Polygons equivalent for this two-circle use case:
-        # merge both circles and bridge their concave/common boundary with the
-        # smallest convex outer envelope.
-        footprint = func.ST_ConvexHull(func.ST_Collect(*circles))
-        if inner_radius_m is not None:
-            inner_circles = [
-                func.ST_Buffer(point, inner_radius_m)
-                for point in metric_thresholds
-            ]
-            inner_aggregate = func.ST_ConvexHull(func.ST_Collect(*inner_circles))
-            footprint = func.ST_Difference(
-                footprint,
-                inner_aggregate,
-            )
-        footprint = func.ST_Transform(footprint, 4326)
-        return func.ST_Translate(func.ST_Force3D(footprint), 0, 0, elevation_m)
+    async def _polygonal_geojson(self, expression: Any) -> dict[str, Any] | None:
+        polygonal = func.ST_Multi(func.ST_CollectionExtract(func.ST_Force2D(expression), 3))
+        row = (await self.session.execute(select(func.ST_IsEmpty(polygonal), func.ST_AsGeoJSON(polygonal, 15)))).one()
+        return None if row[0] is None or bool(row[0]) else json.loads(row[1])
+
+    async def metric_geometry(self, geometry: Any, srid: int, *, shell: bool = False) -> dict[str, Any] | None:
+        """Return a stored WGS84 polygon in the metric CRS (exterior shell optional)."""
+        value = func.ST_Transform(func.ST_Force2D(geometry), srid)
+        if shell:
+            value = func.ST_MakePolygon(func.ST_ExteriorRing(value))
+        return await self._polygonal_geojson(value)
+
+    async def buffer_line(self, coordinates: list[tuple[float, float]], radius_m: float, quad_segs: int, srid: int) -> dict[str, Any] | None:
+        line = self._metric({"type": "LineString", "coordinates": [list(point) for point in coordinates]}, srid)
+        return await self._polygonal_geojson(func.ST_Buffer(line, radius_m, f"quad_segs={quad_segs} endcap=round join=round"))
+
+    async def union(self, srid: int, geometries: list[dict[str, Any] | None]) -> dict[str, Any] | None:
+        items = [self._metric(item, srid) for item in geometries if item]
+        if not items:
+            return None
+        return await self._polygonal_geojson(func.ST_UnaryUnion(func.ST_Collect(array(items)), OVERLAY_GRID_M))
+
+    async def intersection(self, srid: int, first: dict[str, Any] | None, second: dict[str, Any] | None) -> dict[str, Any] | None:
+        if not first or not second:
+            return None
+        return await self._polygonal_geojson(func.ST_Intersection(self._metric(first, srid), self._metric(second, srid), OVERLAY_GRID_M))
+
+    async def difference(self, srid: int, geometry: dict[str, Any] | None, *subtract: dict[str, Any] | None) -> dict[str, Any] | None:
+        removal = await self.union(srid, list(subtract))
+        if not geometry or not removal:
+            return geometry
+        return await self._polygonal_geojson(func.ST_Difference(self._metric(geometry, srid), self._metric(removal, srid), OVERLAY_GRID_M))
+
+    async def snap(self, srid: int, geometry: dict[str, Any], reference: dict[str, Any] | None, tolerance_m: float) -> dict[str, Any]:
+        """Remove CRS round-trip noise against a shared reference boundary."""
+        if not reference:
+            return geometry
+        snapped = await self._polygonal_geojson(func.ST_Snap(self._metric(geometry, srid), self._metric(reference, srid), tolerance_m))
+        return snapped or geometry
+
+    async def node(self, srid: int, geometry: dict[str, Any] | None, neighbours: list[dict[str, Any] | None], tolerance_m: float) -> dict[str, Any] | None:
+        """Insert neighbour vertices lying on this boundary (shared nodes).
+
+        Edges that are collinear in the metric CRS are only collinear in WGS84
+        when both sides carry the same vertices, so every shared boundary gets
+        the union of both vertex sets.
+        """
+        reference = await self.union(srid, neighbours)
+        if not geometry or not reference:
+            return geometry
+        noded = func.ST_Snap(self._metric(geometry, srid), func.ST_Boundary(self._metric(reference, srid)), tolerance_m)
+        return await self._polygonal_geojson(noded) or geometry
+
+    async def topology_metrics(self, srid: int, geometry: dict[str, Any] | None, references: list[dict[str, Any] | None]) -> tuple[float, float, float]:
+        """Return gap distance, overlap area and overlap sliver width in metres."""
+        reference = await self.union(srid, references)
+        if not geometry or not reference:
+            return 0.0, 0.0, 0.0
+        first, second = self._metric(geometry, srid), self._metric(reference, srid)
+        overlap = func.ST_CollectionExtract(func.ST_Intersection(first, second, OVERLAY_GRID_M), 3)
+        row = (await self.session.execute(select(func.ST_Distance(first, second), func.ST_Area(overlap), func.ST_Perimeter(overlap)))).one()
+        area = float(row[1] or 0.0); perimeter = float(row[2] or 0.0)
+        return float(row[0] or 0.0), area, (2 * area / perimeter if perimeter > 0 else 0.0)
 
     @staticmethod
-    def polygon_z(points: list[tuple[float, float, float]]):
-        closed = points if points[0] == points[-1] else [*points, points[0]]
-        coordinates = ", ".join(f"{lon} {lat} {z}" for lon, lat, z in closed)
-        return func.ST_GeomFromEWKT(f"SRID=4326;POLYGON Z (({coordinates}))")
-
-    @staticmethod
-    def multipolygon_z(polygons: list[list[tuple[float, float, float]]]):
-        rings = []
-        for points in polygons:
-            closed = points if points[0] == points[-1] else [*points, points[0]]
-            coordinates = ", ".join(f"{lon} {lat} {z}" for lon, lat, z in closed)
-            rings.append(f"(({coordinates}))")
-        return func.ST_GeomFromEWKT(f"SRID=4326;MULTIPOLYGON Z ({', '.join(rings)})")
+    def metric_multipolygon_z(polygons: list[list[list[tuple[float, float, float]]]], srid: int):
+        """Build a 3D MultiPolygon from metric rings and store it in WGS84."""
+        parts = []
+        for rings in polygons:
+            ring_text = []
+            for ring in rings:
+                closed = ring if ring[0] == ring[-1] else [*ring, ring[0]]
+                ring_text.append("(" + ", ".join(f"{x!r} {y!r} {z!r}" for x, y, z in closed) + ")")
+            parts.append("(" + ", ".join(ring_text) + ")")
+        return func.ST_Transform(func.ST_GeomFromEWKT(f"SRID={srid};MULTIPOLYGON Z ({', '.join(parts)})"), 4326)
 
     async def add_surface(self, **values: Any) -> OlsSurface:
         item = OlsSurface(**values)
@@ -274,45 +223,6 @@ class OlsRepository:
     async def geometry_is_valid(self, geometry: Any) -> tuple[bool, str]:
         row = (await self.session.execute(select(func.ST_IsValid(func.ST_Force2D(geometry)), func.ST_IsValidReason(func.ST_Force2D(geometry)), func.ST_IsEmpty(geometry)))).one()
         return bool(row[0]) and not bool(row[2]), str(row[1])
-
-    @staticmethod
-    def normalize_polygonal_geometry(geometry: Any) -> Any:
-        """Node self-crossing rings without buffering or changing references."""
-        valid = func.ST_MakeValid(
-            geometry,
-            "method=structure keepcollapsed=false",
-        )
-        return func.ST_Multi(func.ST_CollectionExtract(valid, 3))
-
-    @staticmethod
-    def remove_polygonal_overlap(geometry: Any, references: list[Any]) -> Any:
-        """Clip reference interiors while preserving shared topology boundaries."""
-        reference_union = func.ST_Force2D(references[0])
-        for reference in references[1:]:
-            reference_union = func.ST_Union(reference_union, func.ST_Force2D(reference))
-        clipped = func.ST_Difference(geometry, func.ST_UnaryUnion(reference_union))
-        return func.ST_Multi(func.ST_CollectionExtract(clipped, 3))
-
-    @staticmethod
-    def snap_polygon_to_reference(
-        geometry: Any,
-        reference: Any,
-        metric_srid: int,
-        tolerance_m: float,
-        reference_elevation_m: float,
-    ) -> Any:
-        """Remove projection-roundtrip noise using a documented metric tolerance."""
-        metric_geometry = func.ST_Transform(geometry, metric_srid)
-        metric_reference = func.ST_Transform(
-            func.ST_Translate(
-                func.ST_Force3D(reference), 0, 0, reference_elevation_m
-            ),
-            metric_srid,
-        )
-        return func.ST_Transform(
-            func.ST_Snap(metric_geometry, metric_reference, tolerance_m),
-            4326,
-        )
 
     def surface_details_statement(self):
         return (

@@ -4,9 +4,18 @@ from decimal import Decimal
 from typing import Any
 
 from pyproj import Transformer
-from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.modules.ols.envelope import (
+    ApproachProfile,
+    ApproachSection,
+    AxisFrame,
+    TakeoffProfile,
+    arc_segments_per_quadrant,
+    controlling_intervals,
+    distance_to_segment,
+    inner_horizontal_cut_station,
+)
 from app.modules.ols.repository import OlsRepository
 from app.modules.ols_revisions.repository import OlsRevisionRepository
 from app.modules.ols.schemas import (
@@ -17,6 +26,14 @@ from app.modules.ols.schemas import (
     OlsSurfaceResponse,
     OlsSurfaceSummary,
 )
+
+
+# Geometric tolerances (not OLS dimensions; those always come from the standard).
+SNAP_TOLERANCE_M = 0.001  # CRS round-trip noise against the stored Strip
+ARC_TOLERANCE_M = 0.01  # maximum chord sagitta of Inner Horizontal/Conical arcs
+TOPOLOGY_TOLERANCE_M = 0.01
+NODE_TOLERANCE_M = 1e-5  # shared-node insertion; 10 x the overlay grid
+STRIP_OFFSET_TOLERANCE_M = 0.50  # QA tolerance between threshold offset and Strip end
 
 
 class OlsNotFoundError(ValueError): pass
@@ -77,258 +94,296 @@ class AutomaticOlsService:
         return result
 
     @staticmethod
-    def _station_anchor(frame: dict[str, Any], station: float) -> tuple[float,float]:
-        x=frame["near"][0]+station*frame["ux"]; y=frame["near"][1]+station*frame["uy"]
-        return frame["inverse"].transform(x,y)
+    def _axis(frame: dict[str, Any]) -> AxisFrame:
+        return AxisFrame(frame["near"], frame["ux"], frame["uy"])
 
-    async def _trapezoid(self, lon: float, lat: float, bearing: float, start: float, length: float, start_width: float, end_width: float, base_z: float, slope_pct: float, outward: bool):
-        axis = (bearing + 180) % 360 if outward else bearing
-        start_center = await self.repository.projected_point(lon, lat, start, axis)
-        end_center = await self.repository.projected_point(lon, lat, start + length, axis)
-        async def lateral(center, width, side):
-            return await self.repository.projected_point(center[0], center[1], width / 2, (axis + side * 90) % 360)
-        sl = await lateral(start_center, start_width, -1); sr = await lateral(start_center, start_width, 1)
-        el = await lateral(end_center, end_width, -1); er = await lateral(end_center, end_width, 1)
-        end_z = base_z + length * slope_pct / 100
-        return self.repository.polygon_z([(sl[0],sl[1],base_z),(el[0],el[1],end_z),(er[0],er[1],end_z),(sr[0],sr[1],base_z)])
+    @staticmethod
+    def _frame_polygon(axis: AxisFrame, root_station: float, points: list[tuple[float, float]]) -> dict[str, Any]:
+        """Polygon from (outward distance, lateral offset) pairs of a direction."""
+        ring = [list(axis.to_xy(root_station - outward, lateral)) for outward, lateral in points]
+        return {"type": "Polygon", "coordinates": [[*ring, ring[0]]]}
 
-    async def _segmented_surface(self, lon: float, lat: float, bearing: float, start: float, lengths: list[float], start_width: float, divergence_pct: float, max_width: float | None, base_z: float, slopes: list[float], outward: bool, end_widths: list[float] | None = None):
-        axis = (bearing + 180) % 360 if outward else bearing
-        distances = [0.0]
-        elevations = [base_z]
-        for length, slope in zip(lengths, slopes):
-            distances.append(distances[-1] + length)
-            elevations.append(elevations[-1] + length * slope / 100)
-        left = []
-        right = []
-        station_widths = [start_width, *(end_widths or [])]
-        for index, (distance, elevation) in enumerate(zip(distances, elevations)):
-            center = await self.repository.projected_point(lon, lat, start + distance, axis)
-            width = station_widths[index] if len(station_widths) == len(distances) else start_width + 2 * distance * divergence_pct / 100
-            if max_width is not None:
-                width = min(width, max_width)
-            left_point = await self.repository.projected_point(center[0], center[1], width / 2, (axis - 90) % 360)
-            right_point = await self.repository.projected_point(center[0], center[1], width / 2, (axis + 90) % 360)
-            left.append((left_point[0], left_point[1], elevation))
-            right.append((right_point[0], right_point[1], elevation))
-        return self.repository.polygon_z([*left, *reversed(right)])
+    @staticmethod
+    def _footprint_points(breakpoints: list[float], half_width) -> list[tuple[float, float]]:
+        return [*((o, half_width(o)) for o in breakpoints), *((o, -half_width(o)) for o in reversed(breakpoints))]
 
-    async def _transitional_surface(self, directions: list[Any], runway_length: float, strip_length: float, strip_width: float, approach: dict[int, dict[str, Any]], slope_pct: float, horizontal_elevation: float):
-        """Construct both transitional wings from Strip and Approach boundaries."""
-        if len(directions) != 2:
-            raise OlsValidationError("TRANSITIONAL requires exactly two runway directions")
-        if slope_pct <= 0:
-            raise OlsValidationError("TRANSITIONAL slope must be greater than zero")
-        start = self._number(approach, ("START_DISTANCE", "THRESHOLD_OFFSET"))
-        inner_width = self._number(approach, ("INNER_EDGE",))
-        divergence = self._number(approach, ("DIVERGENCE",))
-        sections = sorted(section for section in approach if section > 0)
-        threshold_data = []
+    def _approach_profile(self, params: dict[int, dict[str, Any]]) -> ApproachProfile:
+        sections = sorted(section for section in params if section > 0)
+        if not sections:
+            raise OlsValidationError("APPROACH requires at least one section")
+        use_end_width = all(params[section].get("END_WIDTH") is not None for section in sections)
+        return ApproachProfile(
+            self._number(params, ("INNER_EDGE",)),
+            self._number(params, ("DIVERGENCE",)),
+            [
+                ApproachSection(
+                    self._number(params, ("LENGTH",), section),
+                    self._number(params, ("SLOPE",), section),
+                    self._number(params, ("END_WIDTH",), section) if use_end_width else None,
+                )
+                for section in sections
+            ],
+        )
+
+    def _takeoff_profile(self, params: dict[int, dict[str, Any]], start: float) -> TakeoffProfile:
+        return TakeoffProfile(
+            start,
+            self._number(params, ("INNER_EDGE",)),
+            self._number(params, ("DIVERGENCE",)),
+            self._number(params, ("FINAL_WIDTH",)),
+            self._number(params, ("LENGTH", "TOTAL_LENGTH")),
+            self._number(params, ("SLOPE",)),
+        )
+
+    @staticmethod
+    def _with_z(geometry: dict[str, Any], elevation) -> list[list[list[tuple[float, float, float]]]]:
+        polygons = geometry["coordinates"] if geometry["type"] == "MultiPolygon" else [geometry["coordinates"]]
+        return [
+            [[(float(point[0]), float(point[1]), float(elevation(float(point[0]), float(point[1])))) for point in ring] for ring in polygon]
+            for polygon in polygons
+        ]
+
+    async def _partitioned_surfaces(self, configs: dict[str, dict[str, Any]], context: Any, airport: Any, directions: list[Any], run_id: int) -> dict[tuple[str, int | None], dict[str, Any]]:
+        """Build every configured surface as one non-overlapping OLS partition.
+
+        All geometry is computed in the runway's projected CRS.  Cut stations
+        come from the standard profiles (see ``app.modules.ols.envelope``);
+        the actual Strip and Clearway geometries are the shared boundaries.
+        """
+        repo = self.repository
+        params = {code: config["parameters"] for code, config in configs.items()}
+        frames = []
         for row in directions:
-            geometry = __import__("json").loads(row.threshold)
-            threshold_data.append((float(geometry["coordinates"][0]), float(geometry["coordinates"][1]), float(row[0].TRUE_BEARING_DEG), float(row[0].THRESHOLD_ELEVATION_M)))
+            coordinates = json.loads(row.threshold)["coordinates"]
+            frames.append(self._direction_frame(context.centerline, (float(coordinates[0]), float(coordinates[1]))))
+        srid = frames[0]["srid"]
+        runway_axis = self._axis(frames[0])
+        centerline = [frames[0]["forward"].transform(float(point[0]), float(point[1])) for point in json.loads(context.centerline)["coordinates"]]
 
-        def profile(base_z: float) -> list[tuple[float, float, float]]:
-            stations = [(0.0, inner_width, base_z)]
-            distance = 0.0; width = inner_width; elevation = base_z
-            for section in sections:
-                length = self._number(approach, ("LENGTH",), section)
-                section_slope = self._number(approach, ("SLOPE",), section)
-                end_width = float(approach[section].get("END_WIDTH", width + 2 * length * divergence / 100))
-                rise = length * section_slope / 100
-                if section_slope > 0 and elevation + rise >= horizontal_elevation:
-                    partial = max(0.0, (horizontal_elevation - elevation) / (section_slope / 100))
-                    ratio = partial / length if length else 0.0
-                    stations.append((distance + partial, width + (end_width - width) * ratio, horizontal_elevation))
-                    break
-                distance += length; elevation += rise; width = end_width
-                stations.append((distance, width, elevation))
-                if elevation >= horizontal_elevation: break
-            return stations
+        strip = await repo.active_strip(run_id)
+        if strip is None and ({"APPROACH", "TRANSITIONAL"} & configs.keys()):
+            raise OlsValidationError("APPROACH and TRANSITIONAL require an active Runway Strip")
+        strip_shell = await repo.metric_geometry(strip[0].GEOM, srid, shell=True) if strip is not None else None
+        strip_points = [tuple(point[:2]) for polygon in strip_shell["coordinates"] for point in polygon[0]] if strip_shell else []
 
-        profiles = [profile(item[3]) for item in threshold_data]
-        strip_extension = max(0.0, (strip_length - runway_length) / 2)
-        runway_axis = threshold_data[0][2]
-        polygons = []
-        for side in (-1, 1):
-            lateral_bearing = (runway_axis + side * 90) % 360
-            lower = []
-            for index, reverse in ((0, True), (1, False)):
-                lon, lat, bearing, _ = threshold_data[index]
-                stations = reversed(profiles[index]) if reverse else profiles[index]
-                points = []
-                for distance, width, elevation in stations:
-                    center = await self.repository.projected_point(lon, lat, start + distance, (bearing + 180) % 360)
-                    edge = await self.repository.projected_point(center[0], center[1], width / 2, lateral_bearing)
-                    points.append((edge[0], edge[1], elevation))
-                if index == 0: lower.extend(points)
+        ih_height = ih_radius = ih_elevation = None
+        if "INNER_HORIZONTAL" in params:
+            ih_radius = self._number(params["INNER_HORIZONTAL"], ("HORIZONTAL_OFFSET", "OFFSET", "RADIUS"))
+            ih_height = self._number(params["INNER_HORIZONTAL"], ("HEIGHT",))
+            ih_elevation = float(airport.ELEVATION_M) + ih_height
+        if ({"CONICAL", "TRANSITIONAL"} & configs.keys()) and ih_height is None:
+            raise OlsValidationError("CONICAL and TRANSITIONAL require the INNER_HORIZONTAL configuration")
+        conical_width = self._number(params["CONICAL"], ("HORIZONTAL_WIDTH", "WIDTH")) if "CONICAL" in params else 0.0
+        outer_radius = (ih_radius or 0.0) + conical_width
+        quad_segs = arc_segments_per_quadrant(max(outer_radius, 1.0), ARC_TOLERANCE_M)
+
+        approach_profile = self._approach_profile(params["APPROACH"]) if "APPROACH" in params else None
+        items = []
+        for row, frame in zip(directions, frames):
+            direction = row[0]
+            axis = self._axis(frame)
+            root = min(axis.to_frame(*point)[0] for point in strip_points) if strip_points else frame["threshold_station"]
+            clearway_row = await repo.active_clearway(direction.RUN_DIR_ID)
+            clearway = await repo.metric_geometry(clearway_row[0].GEOM, srid) if clearway_row is not None else None
+            # A direction owns the CWY outside its own threshold; its outer end
+            # edge holds the minimum stations in this direction frame. Take-off
+            # starts at the innermost vertex of that edge and the CWY is then
+            # subtracted, so both share the actual (possibly skewed) edge.
+            if clearway:
+                stations = [axis.to_frame(*point[:2])[0] for polygon in clearway["coordinates"] for point in polygon[0]]
+                clearway_end = max(station for station in stations if station <= min(stations) + SNAP_TOLERANCE_M)
+            else:
+                clearway_end = frame["threshold_station"]
+            takeoff_profile = self._takeoff_profile(params["TAKE_OFF_CLIMB"], root - clearway_end) if "TAKE_OFF_CLIMB" in params else None
+            items.append({"direction": direction, "frame": frame, "axis": axis, "root": root, "clearway": clearway, "clearway_end": clearway_end, "approach_profile": approach_profile, "takeoff_profile": takeoff_profile})
+        clearways = [item["clearway"] for item in items if item["clearway"]]
+
+        ih_footprint = await repo.buffer_line(centerline, ih_radius, quad_segs, srid) if ih_radius is not None else None
+        reach = outer_radius + max(
+            [approach_profile.total_length if approach_profile else 0.0]
+            + [item["takeoff_profile"].end for item in items if item["takeoff_profile"]]
+        ) + math.dist(centerline[0], centerline[-1])
+
+        def band(item: dict[str, Any], low: float, high: float) -> dict[str, Any]:
+            return self._frame_polygon(item["axis"], item["root"], [(low, -reach), (high, -reach), (high, reach), (low, reach)])
+
+        # Transitional outer edge: actual Strip side + IH height / slope. The
+        # station where the Approach edge reaches it is inserted as an Approach
+        # vertex so both surfaces share the same node.
+        side_width: dict[int, float] = {}
+        transitional_slope = None
+        transitional_reach: list[float] = []
+        transitional_bands: list[dict[str, Any]] = []
+        if "TRANSITIONAL" in params:
+            if approach_profile is None:
+                raise OlsValidationError("TRANSITIONAL requires the APPROACH configuration")
+            transitional_slope = self._number(params["TRANSITIONAL"], ("SLOPE",))
+            if transitional_slope <= 0:
+                raise OlsValidationError("TRANSITIONAL slope must be greater than zero")
+            run = ih_height / (transitional_slope / 100)
+            for side in (-1, 1):
+                side_width[side] = max(side * runway_axis.to_frame(*point)[1] for point in strip_points)
+                outer = side_width[side] + run
+                reach_station = approach_profile.station_for_half_width(outer)
+                if reach_station is None:
+                    band_length = approach_profile.total_length
                 else:
-                    first, second = threshold_data
-                    first_center = await self.repository.projected_point(first[0], first[1], strip_extension, (first[2] + 180) % 360)
-                    second_center = await self.repository.projected_point(second[0], second[1], strip_extension, (second[2] + 180) % 360)
-                    for center, elevation in ((first_center, first[3]), (second_center, second[3])):
-                        edge = await self.repository.projected_point(center[0], center[1], strip_width / 2, lateral_bearing)
-                        lower.append((edge[0], edge[1], elevation))
-                    lower.extend(points)
-            outer = []
-            for lon, lat, elevation in lower:
-                distance = max(0.0, horizontal_elevation - elevation) / (slope_pct / 100)
-                point = await self.repository.projected_point(lon, lat, distance, lateral_bearing)
-                outer.append((point[0], point[1], horizontal_elevation))
-            polygons.append([*lower, *reversed(outer)])
-        return self.repository.multipolygon_z(polygons)
+                    transitional_reach.append(reach_station)
+                    # Run past the apex; that part lies inside the Approach and
+                    # is removed, so the corner is the shared Approach vertex.
+                    band_length = reach_station + run
+                edges = []
+                for item in items:
+                    root_station = runway_axis.to_frame(*item["axis"].to_xy(item["root"], 0.0))[0]
+                    sign = item["frame"]["ux"] * runway_axis.ux + item["frame"]["uy"] * runway_axis.uy
+                    edges.append(root_station - sign * band_length)
+                low, high = min(edges), max(edges)
+                ring = [list(runway_axis.to_xy(s, v)) for s, v in ((low, 0.0), (high, 0.0), (high, side * outer), (low, side * outer))]
+                transitional_bands.append({"type": "Polygon", "coordinates": [[*ring, ring[0]]]})
 
-    def _transitional_from_shared_boundary(
-        self,
-        boundary_geojson: str,
-        runway_frame: dict[str, Any],
-        approach_references: list[dict[str, Any]],
-        approach_parameters: dict[int, dict[str, Any]],
-        slope_pct: float,
-        horizontal_elevation: float,
-        strip_station_range: tuple[float, float],
-        runway_elevation_profile: list[tuple[float, float]],
-    ) -> Any:
-        """Construct both wings from the actual Strip/Approach exterior edge."""
-        if slope_pct <= 0:
-            raise OlsValidationError("TRANSITIONAL slope must be greater than zero")
-        raw=json.loads(boundary_geojson)
-        lines=raw.get("coordinates",[]) if raw.get("type")=="MultiLineString" else [raw.get("coordinates",[])]
-        lines=[line for line in lines if len(line)>=2]
-        if not lines: raise OlsValidationError("Transitional reference boundary is empty")
-        line=max(lines,key=len)
-        sections=sorted(section for section in approach_parameters if section>0)
+        # Approach / Take-off per direction.
+        for item in items:
+            approach, takeoff = item["approach_profile"], item["takeoff_profile"]
+            item["approach_footprint"] = item["approach"] = item["takeoff"] = None
+            item["notes"] = []
+            if approach is not None:
+                stations = sorted({*approach.breakpoints, *transitional_reach})
+                footprint = self._frame_polygon(item["axis"], item["root"], self._footprint_points(stations, approach.half_width))
+                footprint = await repo.snap(srid, footprint, strip_shell, SNAP_TOLERANCE_M)
+                item["approach_footprint"] = footprint
+                item["approach"] = await repo.difference(srid, footprint, strip_shell, *clearways)
+            if takeoff is not None:
+                footprint = self._frame_polygon(item["axis"], item["root"], self._footprint_points(takeoff.breakpoints, takeoff.half_width))
+                item["takeoff"] = await repo.difference(srid, footprint, strip_shell, *clearways)
+            if approach is not None and takeoff is not None:
+                overlap = await repo.intersection(srid, item["approach"], item["takeoff"])
+                if overlap:
+                    intervals = controlling_intervals(approach, takeoff)
+                    takeoff_band = await repo.union(srid, [band(item, a, b) for a, b, code in intervals if code == "TAKE_OFF_CLIMB"])
+                    approach_band = await repo.union(srid, [band(item, a, b) for a, b, code in intervals if code == "APPROACH"])
+                    item["approach"] = await repo.difference(srid, item["approach"], await repo.intersection(srid, overlap, takeoff_band))
+                    item["takeoff"] = await repo.difference(srid, item["takeoff"], await repo.intersection(srid, overlap, approach_band))
+                    item["notes"].append("Approach/Take-off overlap (distance from Strip end): " + ", ".join(f"{'Take-off' if code == 'TAKE_OFF_CLIMB' else 'Approach'} {a:.1f}-{b:.1f} m" for a, b, code in intervals))
+            if ih_footprint is not None and (approach is not None or takeoff is not None):
+                cut = inner_horizontal_cut_station(approach, takeoff, ih_height)
+                if cut is not None:
+                    removed = await repo.intersection(srid, ih_footprint, band(item, cut, reach))
+                    item["approach"] = await repo.difference(srid, item["approach"], removed)
+                    item["takeoff"] = await repo.difference(srid, item["takeoff"], removed)
+                    item["notes"].append(f"Inner Horizontal controls beyond {cut:.1f} m from Strip end")
+        approaches = [item["approach"] for item in items if item["approach"]]
+        takeoffs = [item["takeoff"] for item in items if item["takeoff"]]
 
-        def approach_profile(distance: float, base: float) -> tuple[float, float]:
-            elevation=base; remaining=max(0.0,distance)
-            width=self._number(approach_parameters,("INNER_EDGE",))
-            for section in sections:
-                length=self._number(approach_parameters,("LENGTH",),section)
-                section_slope=self._number(approach_parameters,("SLOPE",),section)
-                end_width=float(approach_parameters[section].get("END_WIDTH",width+2*length*self._number(approach_parameters,("DIVERGENCE",))/100))
-                used=min(remaining,length)
-                elevation+=used*section_slope/100
-                width+=((end_width-width)*used/length) if length else 0.0
-                remaining-=used
-                if remaining<=0: break
-            return elevation,width
+        transitional = None
+        if transitional_bands:
+            transitional = await repo.difference(
+                srid, await repo.union(srid, transitional_bands), strip_shell, *clearways,
+                *(item["approach_footprint"] for item in items), *takeoffs,
+            )
 
-        def approach_cutoff(base: float) -> tuple[float, float]:
-            """Return the exact station/width where Approach reaches Inner Horizontal."""
-            distance=0.0; elevation=base
-            width=self._number(approach_parameters,("INNER_EDGE",))
-            divergence=self._number(approach_parameters,("DIVERGENCE",))
-            for section in sections:
-                length=self._number(approach_parameters,("LENGTH",),section)
-                section_slope=self._number(approach_parameters,("SLOPE",),section)
-                end_width=float(approach_parameters[section].get("END_WIDTH",width+2*length*divergence/100))
-                rise=length*section_slope/100
-                if section_slope>0 and elevation+rise>=horizontal_elevation-1e-9:
-                    partial=max(0.0,(horizontal_elevation-elevation)/(section_slope/100))
-                    ratio=partial/length if length else 0.0
-                    return distance+partial,width+(end_width-width)*ratio
-                distance+=length; elevation+=rise; width=end_width
-                if elevation>=horizontal_elevation-1e-9:
-                    return distance,width
-            raise OlsValidationError("Approach does not intersect the Inner Horizontal elevation")
+        inner_horizontal = conical = None
+        if ih_footprint is not None and "INNER_HORIZONTAL" in params:
+            inner_horizontal = await repo.difference(srid, ih_footprint, strip_shell, *clearways, transitional, *approaches, *takeoffs)
+        if "CONICAL" in params:
+            outer = await repo.buffer_line(centerline, outer_radius, quad_segs, srid)
+            conical = await repo.difference(srid, outer, ih_footprint, *approaches, *takeoffs)
 
-        profile=sorted(runway_elevation_profile)
-        if len(profile)<2:
-            raise OlsValidationError("Runway elevation profile requires two thresholds")
+        # Height functions (absolute elevations) evaluated at every vertex.
+        def centerline_distance(x: float, y: float) -> float:
+            return min(distance_to_segment((x, y), a, b) for a, b in zip(centerline, centerline[1:]))
 
-        def strip_elevation(station: float) -> float:
-            (start_station,start_z),(end_station,end_z)=profile[0],profile[-1]
-            if end_station-start_station<=1e-9: return start_z
-            ratio=min(1.0,max(0.0,(station-start_station)/(end_station-start_station)))
-            return start_z+(end_z-start_z)*ratio
+        conical_slope = None
+        if "CONICAL" in params:
+            conical_height = self._number(params["CONICAL"], ("HEIGHT",))
+            source = params["CONICAL"].get(0, {})
+            conical_slope = float(source["SLOPE"]) if source.get("SLOPE") is not None else conical_height / conical_width * 100
 
-        for reference in approach_references:
-            cutoff_distance,cutoff_width=approach_cutoff(reference["base_z"])
-            reference["cutoff_distance"]=cutoff_distance
-            reference["cutoff_width"]=cutoff_width
+        def approach_z(item: dict[str, Any]):
+            base = float(item["direction"].THRESHOLD_ELEVATION_M)
+            return lambda x, y: base + approach_profile.height(item["root"] - item["axis"].to_frame(x, y)[0])
 
-        prepared=[]
-        px,py=-runway_frame["uy"],runway_frame["ux"]
-        for coordinate in line:
-            lon,lat=float(coordinate[0]),float(coordinate[1]); x,y=runway_frame["forward"].transform(lon,lat)
-            lateral=(x-runway_frame["near"][0])*px+(y-runway_frame["near"][1])*py
-            elevation=None
-            for reference in approach_references:
-                frame=reference["frame"]; station=(x-frame["near"][0])*frame["ux"]+(y-frame["near"][1])*frame["uy"]
-                outward=reference["strip_end"]-station
-                # A transverse edge projects a few decimetres along the runway
-                # axis after CRS round-trips. Keep the same sub-metre topology
-                # tolerance used when Approach is snapped to Strip.
-                if -0.50<=outward<=reference["cutoff_distance"]+0.50:
-                    elevation=approach_profile(max(0.0,outward),reference["base_z"])[0]; break
-            global_station=(x-runway_frame["near"][0])*runway_frame["ux"]+(y-runway_frame["near"][1])*runway_frame["uy"]
-            if elevation is None and strip_station_range[0]-0.50<=global_station<=strip_station_range[1]+0.50:
-                elevation=strip_elevation(global_station)
-            if elevation is None or elevation>horizontal_elevation+0.001:
-                continue
-            side=1 if lateral>0.01 else -1 if lateral<-0.01 else 0
-            prepared.append({"lon":lon,"lat":lat,"x":x,"y":y,"side":side,"station":global_station,"lateral":lateral,"z":elevation})
+        def takeoff_z(item: dict[str, Any]):
+            direction, frame = item["direction"], item["frame"]
+            base = float(direction.THRESHOLD_ELEVATION_M) + abs(item["clearway_end"] - frame["threshold_station"]) * float(direction.SLOPE_PCT) / 100
+            profile = item["takeoff_profile"]
+            return lambda x, y: base + profile.height(item["root"] - item["axis"].to_frame(x, y)[0])
 
-        # Approach section vertices do not necessarily contain the precise
-        # elevation intersection. Add that interpolated shared vertex so the
-        # Transitional surface neither leaves a gap nor continues too far.
-        for reference in approach_references:
-            frame=reference["frame"]
-            for root in reference["root_points"]:
-                lon,lat=float(root[0]),float(root[1])
-                x,y=runway_frame["forward"].transform(lon,lat)
-                lateral=(x-runway_frame["near"][0])*px+(y-runway_frame["near"][1])*py
-                side=1 if lateral>0.01 else -1 if lateral<-0.01 else 0
-                station=(x-runway_frame["near"][0])*runway_frame["ux"]+(y-runway_frame["near"][1])*runway_frame["uy"]
-                prepared.append({"lon":lon,"lat":lat,"x":x,"y":y,"side":side,"station":station,"lateral":lateral,"z":reference["base_z"]})
+        runway_profile = sorted(
+            (runway_axis.to_frame(*item["axis"].to_xy(item["frame"]["threshold_station"], 0.0))[0], float(item["direction"].THRESHOLD_ELEVATION_M))
+            for item in items
+        )
+        strip_range = (min(runway_axis.to_frame(*p)[0] for p in strip_points), max(runway_axis.to_frame(*p)[0] for p in strip_points)) if strip_points else (0.0, 0.0)
 
-            cutoff_points=[]
-            ring=reference["ring"]
-            for first,second in zip(ring,ring[1:]):
-                first_z=float(first[2]); second_z=float(second[2])
-                if (first_z-horizontal_elevation)*(second_z-horizontal_elevation)>0 or abs(first_z-second_z)<1e-9:
-                    continue
-                ratio=(horizontal_elevation-first_z)/(second_z-first_z)
-                if not 0.0<=ratio<=1.0: continue
-                first_x,first_y=runway_frame["forward"].transform(float(first[0]),float(first[1]))
-                second_x,second_y=runway_frame["forward"].transform(float(second[0]),float(second[1]))
-                x=first_x+(second_x-first_x)*ratio; y=first_y+(second_y-first_y)*ratio
-                lateral=(x-runway_frame["near"][0])*px+(y-runway_frame["near"][1])*py
-                side=1 if lateral>0.01 else -1 if lateral<-0.01 else 0
-                station=(x-runway_frame["near"][0])*runway_frame["ux"]+(y-runway_frame["near"][1])*runway_frame["uy"]
-                lon,lat=runway_frame["inverse"].transform(x,y)
-                cutoff_points.append({"lon":lon,"lat":lat,"x":x,"y":y,"side":side,"station":station,"lateral":lateral,"z":horizontal_elevation})
-            for side in (-1,1):
-                candidates=[point for point in cutoff_points if point["side"]==side]
-                if not candidates:
-                    raise OlsValidationError(f"Approach/Inner Horizontal intersection is missing for side {side}")
-                prepared.append(min(candidates,key=lambda point:abs(point["station"])))
+        def runway_elevation(station: float) -> float:
+            (first_station, first_z), (last_station, last_z) = runway_profile[0], runway_profile[-1]
+            if last_station - first_station <= 1e-9:
+                return first_z
+            ratio = min(1.0, max(0.0, (station - first_station) / (last_station - first_station)))
+            return first_z + (last_z - first_z) * ratio
 
-        polygons=[]
-        for side in (-1,1):
-            # The union boundary is a cyclic ring.  Ring order is unsuitable for
-            # building an offset polygon because its start vertex is arbitrary
-            # and can split one wing across the first/last coordinate.  Order
-            # the real shared-edge vertices by the runway longitudinal station
-            # instead.  At a cross-edge several vertices may have the same
-            # station; the outermost vertex is the actual side boundary.
-            by_station: dict[int,dict[str,Any]]={}
-            for point in prepared:
-                if point["side"]!=side: continue
-                key=round(point["station"]*1000)
-                existing=by_station.get(key)
-                if existing is None or abs(point["lateral"])>abs(existing["lateral"]): by_station[key]=point
-            lower=sorted(by_station.values(),key=lambda point:point["station"])
-            if len(lower)<2: raise OlsValidationError(f"Transitional lower boundary is missing for side {side}")
-            lower_coords=[]; upper_coords=[]
-            for point in lower:
-                lower_coords.append((point["lon"],point["lat"],point["z"]))
-                extent=(horizontal_elevation-point["z"])/(slope_pct/100)
-                ux=point["x"]+side*px*extent; uy=point["y"]+side*py*extent
-                ulon,ulat=runway_frame["inverse"].transform(ux,uy)
-                upper_coords.append((ulon,ulat,horizontal_elevation))
-            polygons.append([*lower_coords,*reversed(upper_coords)])
-        return self.repository.multipolygon_z(polygons)
+        def transitional_z(x: float, y: float) -> float:
+            station, lateral = runway_axis.to_frame(x, y)
+            side = 1 if lateral >= 0 else -1
+            if strip_range[0] - SNAP_TOLERANCE_M <= station <= strip_range[1] + SNAP_TOLERANCE_M:
+                lower_width, lower_z = side_width[side], runway_elevation(station)
+            else:
+                item = min(items, key=lambda candidate: math.dist((x, y), candidate["axis"].to_xy(candidate["root"], 0.0)))
+                outward = item["root"] - item["axis"].to_frame(x, y)[0]
+                lower_width, lower_z = approach_profile.half_width(outward), approach_z(item)(x, y)
+            z = lower_z + max(0.0, abs(lateral) - lower_width) * transitional_slope / 100
+            return min(z, max(lower_z, ih_elevation))
+
+        result: dict[tuple[str, int | None], dict[str, Any]] = {}
+
+        async def topology(geometry, gap_references, reference_name, message, extra_warning=False):
+            others = [strip_shell, *clearways, *(value for value in (inner_horizontal, conical, transitional, *approaches, *takeoffs) if value and value is not geometry)]
+            _, overlap_area, overlap_width = await repo.topology_metrics(srid, geometry, others)
+            gap = (await repo.topology_metrics(srid, geometry, gap_references))[0] if any(gap_references) else 0.0
+            passed = gap <= TOPOLOGY_TOLERANCE_M and overlap_width <= TOPOLOGY_TOLERANCE_M and not extra_warning
+            return {"reference_geometry": reference_name, "topology_status": "PASSED" if passed else "WARNING", "topology_message": f"{message} Measured overlap with other OLS/Strip/CWY: {overlap_area:.4f} m² (sliver width {overlap_width:.6f} m).", "gap_m": round(gap, 4), "overlap_m": round(overlap_width, 4)}
+
+        layers = {"INNER_HORIZONTAL": inner_horizontal, "CONICAL": conical, "TRANSITIONAL": transitional}
+        for index, item in enumerate(items):
+            layers[f"APPROACH:{index}"] = item["approach"]
+            layers[f"TAKE_OFF_CLIMB:{index}"] = item["takeoff"]
+        noded = {
+            name: await repo.node(srid, value, [strip_shell, *clearways, *(other for key, other in layers.items() if key != name)], NODE_TOLERANCE_M)
+            for name, value in layers.items()
+        }
+        inner_horizontal, conical, transitional = noded["INNER_HORIZONTAL"], noded["CONICAL"], noded["TRANSITIONAL"]
+        for index, item in enumerate(items):
+            item["approach"], item["takeoff"] = noded[f"APPROACH:{index}"], noded[f"TAKE_OFF_CLIMB:{index}"]
+        approaches = [item["approach"] for item in items if item["approach"]]
+        takeoffs = [item["takeoff"] for item in items if item["takeoff"]]
+
+        def store(code: str, direction_id: int | None, geometry, elevation, topology_values) -> None:
+            if not geometry:
+                raise OlsValidationError(f"{code} is completely controlled by other OLS surfaces")
+            result[(code, direction_id)] = {"geometry": repo.metric_multipolygon_z(self._with_z(geometry, elevation), srid), "topology": topology_values}
+
+        for item in items:
+            direction, designator = item["direction"], item["direction"].DESIGNATOR
+            notes = "; ".join(item["notes"])
+            if "APPROACH" in params:
+                expected = item["frame"]["threshold_station"] - self._number(params["APPROACH"], ("START_DISTANCE", "THRESHOLD_OFFSET"))
+                delta = abs(expected - item["root"])
+                # The actual Strip end is the authoritative topology boundary; the
+                # configured threshold offset is retained as a QA comparison.
+                message = f"RWY {designator} Approach starts at the actual Strip end; configured offset differs by {delta:.3f} m ({'within' if delta <= STRIP_OFFSET_TOLERANCE_M else 'outside'} {STRIP_OFFSET_TOLERANCE_M:.2f} m QA tolerance). {notes}."
+                store("APPROACH", direction.RUN_DIR_ID, item["approach"], approach_z(item), await topology(item["approach"], [strip_shell], "ACTUAL_RUNWAY_STRIP_END", message, delta > STRIP_OFFSET_TOLERANCE_M))
+            if "TAKE_OFF_CLIMB" in params:
+                if item["clearway"]:
+                    reference, message = "CLEARWAY_END_AND_RUNWAY_CENTERLINE", f"RWY {designator} Take-off starts at RWY {designator} Clearway outer end. {notes}."
+                else:
+                    reference, message = "THRESHOLD_NO_CLEARWAY", f"RWY {designator} has no active Clearway; Take-off starts at its threshold. {notes}."
+                store("TAKE_OFF_CLIMB", direction.RUN_DIR_ID, item["takeoff"], takeoff_z(item), await topology(item["takeoff"], [item["clearway"]], reference, message, not item["clearway"]))
+        if "INNER_HORIZONTAL" in params:
+            store("INNER_HORIZONTAL", None, inner_horizontal, lambda x, y: ih_elevation, await topology(inner_horizontal, [], "PARTITIONED_OLS_ENVELOPE", "Inner Horizontal excludes Strip, Clearway, Transitional and the controlling Approach/Take-off parts."))
+        if "CONICAL" in params:
+            store("CONICAL", None, conical, lambda x, y: ih_elevation + min(conical_height, max(0.0, centerline_distance(x, y) - ih_radius) * conical_slope / 100), await topology(conical, [inner_horizontal], "PARTITIONED_OLS_ENVELOPE", "Conical is cut by the Approach and Take-off footprints."))
+        if "TRANSITIONAL" in params:
+            store("TRANSITIONAL", None, transitional, transitional_z, await topology(transitional, [strip_shell, *approaches], "RUNWAY_STRIP_AND_APPROACH_BOUNDARIES", "Transitional lower boundary is the actual Strip and Approach edge; outer edge is the Strip side offset by Inner Horizontal height / slope."))
+        return result
 
     async def generate(self, standard_id: int, run_id: int, replace_existing: bool, user_id: int | None = None, revision_note: str | None = None) -> AutomaticOlsGenerationResponse:
         context = await self.repository.runway_context(run_id)
@@ -344,116 +399,19 @@ class AutomaticOlsService:
         directions = await self.repository.direction_contexts(run_id)
         if any(config["code"] in self.DIRECTION_LEVEL for config in configs) and not directions: raise OlsValidationError("Runway directions must be configured before generation")
         if any(config["code"] in self.RUN_LEVEL for config in configs) and len(directions) != 2: raise OlsValidationError("Inner Horizontal and Conical generation requires exactly two runway thresholds")
+        canonical = lambda code: "TAKE_OFF_CLIMB" if code == "TAKEOFF_CLIMB" else code  # noqa: E731
+        surfaces = await self._partitioned_surfaces({canonical(config["code"]): config for config in configs}, context, airport, directions, run_id)
         priority={"INNER_HORIZONTAL":0,"CONICAL":1,"APPROACH":2,"TAKE_OFF_CLIMB":3,"TAKEOFF_CLIMB":3,"TRANSITIONAL":4}
         configs=sorted(configs,key=lambda item:priority.get(item["code"],99))
         generated = []
-        approach_geometries: list[Any] = []
-        approach_references: list[dict[str,Any]] = []
-        inner_offset = inner_height = None
-        approach_parameters = None
         for config in configs:
-            if config["code"] == "INNER_HORIZONTAL":
-                inner_offset = self._number(config["parameters"], ("HORIZONTAL_OFFSET", "OFFSET", "RADIUS")); inner_height = self._number(config["parameters"], ("HEIGHT",))
-            elif config["code"] == "APPROACH":
-                approach_parameters = config["parameters"]
-        for config in configs:
-            surface=config["surface"]; code=config["code"]; params=config["parameters"]
+            surface=config["surface"]; code=config["code"]
             targets = [(None, None)] if code in self.RUN_LEVEL else directions
             for direction_row in targets:
                 direction = direction_row[0] if direction_row else None
-                topology={"reference_geometry":None,"topology_status":"NOT_APPLICABLE","topology_message":None,"gap_m":None,"overlap_m":None}
-                if code == "INNER_HORIZONTAL":
-                    geom = await self.repository.centerline_buffer_3d(run_id, inner_offset, float(airport.ELEVATION_M)+inner_height)
-                elif code == "CONICAL":
-                    if inner_offset is None or inner_height is None: raise OlsValidationError("CONICAL requires INNER_HORIZONTAL offset and height")
-                    width=self._number(params,("HORIZONTAL_WIDTH","WIDTH")); height=self._number(params,("HEIGHT",)); inner_elevation=float(airport.ELEVATION_M)+inner_height; geom=await self.repository.conical_surface_3d(run_id,inner_offset,width,inner_elevation,inner_elevation+height)
-                elif code == "TRANSITIONAL":
-                    if inner_height is None or approach_parameters is None: raise OlsValidationError("TRANSITIONAL requires INNER_HORIZONTAL and APPROACH configurations")
-                    strip = await self.repository.active_strip(run_id)
-                    if strip is None: raise OlsValidationError("TRANSITIONAL requires an active Runway Strip")
-                    if len(approach_geometries)!=2: raise OlsValidationError("TRANSITIONAL requires both generated Approach direction geometries")
-                    boundary=await self.repository.transitional_reference_boundary(run_id,approach_geometries)
-                    first_threshold=json.loads(directions[0].threshold)["coordinates"]
-                    runway_frame=self._direction_frame(context.centerline,(float(first_threshold[0]),float(first_threshold[1])))
-                    strip_stations=self._geometry_stations(strip.geojson,runway_frame)
-                    runway_profile=[]
-                    for profile_row in directions:
-                        profile_direction=profile_row[0]
-                        profile_threshold=json.loads(profile_row.threshold)["coordinates"]
-                        profile_x,profile_y=runway_frame["forward"].transform(float(profile_threshold[0]),float(profile_threshold[1]))
-                        profile_station=(profile_x-runway_frame["near"][0])*runway_frame["ux"]+(profile_y-runway_frame["near"][1])*runway_frame["uy"]
-                        runway_profile.append((profile_station,float(profile_direction.THRESHOLD_ELEVATION_M)))
-                    geom=self._transitional_from_shared_boundary(
-                        boundary,runway_frame,approach_references,approach_parameters,
-                        self._number(params,("SLOPE",)),float(airport.ELEVATION_M)+inner_height,
-                        (min(strip_stations),max(strip_stations)),runway_profile,
-                    )
-                    geom=self.repository.normalize_polygonal_geometry(geom)
-                    geom=self.repository.remove_polygonal_overlap(geom,[strip[0].GEOM,*approach_geometries])
-                    topology={"reference_geometry":"RUNWAY_STRIP_AND_APPROACH_BOUNDARIES","topology_status":"PASSED","topology_message":"Transitional lower boundary is derived from the actual Strip and generated Approach union.","gap_m":0.0,"overlap_m":0.0}
-                else:
-                    threshold=json.loads(direction_row.threshold); lon,lat=map(float,threshold["coordinates"][:2]); frame=self._direction_frame(context.centerline,(lon,lat)); bearing=frame["bearing"]; base_z=float(direction.THRESHOLD_ELEVATION_M)
-                    if code == "APPROACH":
-                        strip=await self.repository.active_strip(run_id)
-                        if strip is None: raise OlsValidationError("APPROACH requires an active Runway Strip")
-                        standard_start=self._number(params,("START_DISTANCE","THRESHOLD_OFFSET")); strip_end=min(self._geometry_stations(strip.geojson,frame)); expected_station=frame["threshold_station"]-standard_start; delta=expected_station-strip_end
-                        # The standard offset is retained as a QA comparison, but
-                        # the operational Strip geometry is the authoritative shared
-                        # topology boundary. A surveyed threshold can legitimately be
-                        # displaced from a previously drawn runway/Strip geometry.
-                        # Blocking generation here creates no safer geometry; anchoring
-                        # Approach to the actual Strip end guarantees a common boundary
-                        # and reports the source discrepancy for later data correction.
-                        tolerance_m=0.50
-                        lon,lat=self._station_anchor(frame,strip_end); start=0.0; inner=self._number(params,("INNER_EDGE",)); divergence=self._number(params,("DIVERGENCE",)); sections=sorted(k for k in params if k>0); lengths=[self._number(params,("LENGTH",),s) for s in sections]; slopes=[self._number(params,("SLOPE",),s) for s in sections]; end_widths=[self._number(params,("END_WIDTH",),s) for s in sections] if all("END_WIDTH" in params[s] for s in sections) else None; geom=await self._segmented_surface(lon,lat,bearing,start,lengths,inner,divergence,None,base_z,slopes,True,end_widths=end_widths)
-                        geom=self.repository.snap_polygon_to_reference(geom,strip[0].GEOM,frame["srid"],0.001,base_z)
-                        within_tolerance=abs(delta)<=tolerance_m
-                        topology={
-                            "reference_geometry":"ACTUAL_RUNWAY_STRIP_END",
-                            "topology_status":"PASSED" if within_tolerance else "WARNING",
-                            "topology_message":(
-                                f"Approach is anchored to the actual Strip end; configured offset differs by {abs(delta):.3f} m "
-                                f"({'within' if within_tolerance else 'outside'} {tolerance_m:.2f} m QA tolerance)."
-                            ),
-                            "gap_m":0.0,
-                            "overlap_m":0.0,
-                        }
-                        approach_geometries.append(geom)
-                        approach_geojson=await self.session.scalar(select(func.ST_AsGeoJSON(geom,15)))
-                        approach_ring=json.loads(str(approach_geojson))["coordinates"][0]
-                        root_points=[]
-                        for root_point in approach_ring[:-1]:
-                            root_x,root_y=frame["forward"].transform(float(root_point[0]),float(root_point[1]))
-                            root_station=(root_x-frame["near"][0])*frame["ux"]+(root_y-frame["near"][1])*frame["uy"]
-                            if abs(root_station-strip_end)<=2.0:
-                                root_points.append(root_point)
-                        if len(root_points)<2:
-                            raise OlsValidationError(f"RWY {direction.DESIGNATOR} Approach root vertices could not be resolved")
-                        approach_references.append({"frame":frame,"strip_end":strip_end,"base_z":base_z,"run_dir_id":direction.RUN_DIR_ID,"root_points":root_points,"ring":approach_ring})
-                    else:
-                        clearway=await self.repository.active_clearway(direction.RUN_DIR_ID)
-                        # A runway direction owns the CWY located outside its own
-                        # threshold.  In this direction frame the runway interior
-                        # is positive, therefore that CWY's outer end is the
-                        # minimum station and take-off continues on the reverse
-                        # centreline bearing.  Never inspect the opposite
-                        # direction's CWY.
-                        if clearway is not None:
-                            clearway_end=min(self._geometry_stations(clearway.geojson,frame))
-                            bearing=(frame["bearing"]+180)%360
-                            reference="CLEARWAY_END_AND_RUNWAY_CENTERLINE"
-                            topology_status="PASSED"
-                            topology_message=f"RWY {direction.DESIGNATOR} Take-off is anchored to RWY {direction.DESIGNATOR} Clearway outer end."
-                        else:
-                            clearway_end=frame["threshold_station"]
-                            bearing=(frame["bearing"]+180)%360
-                            reference="THRESHOLD_NO_CLEARWAY"
-                            topology_status="WARNING"
-                            topology_message=f"RWY {direction.DESIGNATOR} has no active Clearway; Take-off starts at its threshold."
-                        lon,lat=self._station_anchor(frame,clearway_end); start=0.0; inner=self._number(params,("INNER_EDGE",)); divergence=self._number(params,("DIVERGENCE",)); final=self._number(params,("FINAL_WIDTH",)); length=self._number(params,("LENGTH","TOTAL_LENGTH")); slope=self._number(params,("SLOPE",)); base_z += abs(clearway_end-frame["threshold_station"])*float(direction.SLOPE_PCT)/100; diverging_length=(final-inner)/2/(divergence/100); lengths=[min(diverging_length,length)]; slopes=[slope]; topology={"reference_geometry":reference,"topology_status":topology_status,"topology_message":topology_message,"gap_m":0.0,"overlap_m":0.0}
-                        if diverging_length < length: lengths.append(length-diverging_length); slopes.append(slope)
-                        geom=await self._segmented_surface(lon,lat,bearing,start,lengths,inner,divergence,final,base_z,slopes,False)
                 direction_id=direction.RUN_DIR_ID if direction else None
+                computed=surfaces[(canonical(code), direction_id)]
+                geom=computed["geometry"]; topology=computed["topology"]
                 valid, reason = await self.repository.geometry_is_valid(geom)
                 if not valid: raise OlsValidationError(f"Generated {code} geometry is invalid: {reason}")
                 item=await self.repository.existing_surface(standard_ols_id=surface.STANDARD_OLS_ID,run_id=run_id,run_dir_id=direction_id,method_id=method.GENERATION_METHOD_ID)
