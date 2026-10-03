@@ -1,0 +1,372 @@
+AIP                                                                                                         AD 2 UBBL – 1
+AZERBAIJAN                                                                                                      16 APR 2026
+
+
+                                                      AD 2 UBBL
+                         UBBL AD 2.1 AERODROME LOCATION INDICATOR AND NAME
+                                                UBBL – LENKORAN
+                  UBBL AD 2.2 AERODROME GEOGRAPHICAL AND ADMINISTRATIVE DATA
+  1    ARP coordinates and site at AD              384531N 0484823E
+                                                   in the center of RWY 15/33
+  2    Direction and distance from (city)          2.0 KM (1.1 NM) W of Lenkoran
+  3    Elevation/Reference temperature             Elev: -35 FT (-11 M) / T: 12.5°C
+  4    Geoid undulation at AD ELEV PSN             13 FT (4 M)
+  5    MAG VAR/Annual change                       6° E (2025)/0.01° increasing
+  6    AD Administration, address, telephone,      Lenkoran International Airport AZ 4200 Lenkoran Azerbaijan
+       telefax, telex, AFS                         Tel: (+9942525) 83125
+  7    Types of traffic permitted (IFR/VFR)        IFR/VFR
+  8    Remarks                                     NIL
+                                           UBBL AD 2.3 OPERATIONAL HOURS
+  1    AD Administration                          MON-FRI 0500-1400 UTC SAT 0600-1100 UTC SUN 0600-1100 UTC
+                                                  HOL 0600-1100 UTC
+ 2     Customs and immigration                    HO
+ 3     Health and sanitation                      HO
+ 4     AIS Briefing Office                        0200-2000 UTC
+ 5     ATS Reporting Office (ARO)                 0200-2000 UTC
+ 6     MET Briefing Office                        0200-2000 UTC
+ 7     ATS                                        0200-2000 UTC
+ 8     Fuelling                                   NIL
+ 9     Handling                                   0200-2000 UTC
+ 10    Security                                   0200-2000 UTC
+ 11    De-icing                                   0200-2000 UTC
+ 12    Remarks                                    NIL
+                                 UBBL AD 2.4 HANDLING SERVICES AND FACILITIES
+  1   Cargo-handling facilities                   NIL
+  2   Fuel/oil types                              Fuel: NIL
+                                                  Oil: NIL
+  3   Fuelling facilities/capacity                NIL
+  4   De-icing facilities                         NIL
+  5   Hangar space for visiting aircraft          NIL
+  6   Repair facilities for visiting aircraft     NIL
+  7   Remarks                                     NIL
+                                          UBBL AD 2.5 PASSENGER FACILITIES
+  1   Hotels                                      In the city.
+  2   Restaurants                                 In the airport.
+  3   Transportation                              Taxies H24. Route taxies, buses.
+  4   Medical facilities                          First aid at AD. Hospitals in the city.
+  5   Bank and Post Office                        In the city.
+  6   Tourist Office                              In the city.
+  7   Remarks                                     NIL
+                                UBBL AD 2.6 RESCUE AND FIRE FIGHTING SERVICES
+  1   AD category for fire fighting               H24: CAT 6
+  2   Rescue equipment                            2 Fire fighting trucks,
+                                                  1 Quick response vehicle,
+
+
+
+State Civil Aviation Agency                                                                        AIRAC AMDT 02/26
+AD 2 UBBL – 2                                                                                                                  AIP
+09 JUL 2026                                                                                                             AZERBAIJAN
+
+
+                                                    1 Water tanker truck 6 t
+  3     Capability for removal of disabled aircraft Disabled aircraft removal facilitation is available for 4C category aircraft
+  4     Remarks                                     Responsible coordinator for removal of disabled aircraft:
+                                                    Tel: (9942525) 83226
+                                                    Fax: (9942525) 83226
+                                                    E-mail: rafail.burcayev@azal.az
+                                         UBBL AD 2.7 SEASONAL AVAILABILITY
+  1     Types of clearing equipment                  Snow Blower; Snow Ploughs.
+  2     Clearance priorities                         1. RWY 15/33 and associated TWY to Apron
+                                                     2. ACFT stands
+  3     Remarks                                      NIL
+                        UBBL AD 2.8 APRONS, TAXIWAYS AND CHECK LOCATIONS DATA
+  1     Apron surface and strength                   Apron
+                                                     Surface: CONC_ASPH
+                                                     Strength: NIL
+                                                     Stands: 1 – 3 CONC_ASPH PCR 1557 F/A/W/U
+  2     Taxiway width, surface and strength          TWYs: A, B
+                                                     Width: 23m; Surface: CONC_ASPH; PCR 1557 F/A/W/U
+  3     Altimeter checkpoint location and            Apron: -35 FT
+        elevation
+  4     VOR/INS checkpoints                          VOR: Nil
+                                                     INS: Nil
+  5     Remarks                                      NIL
+          UBBL AD 2.9 SURFACE MOVEMENT GUIDANCE AND CONTROL SYSTEM AND MARKINGS
+  1     Use of aircraft stand ID signs, TWY guide Sign boards during taxing at all intersections with TWY and at all holding
+        lines and visual docking/parking guidance PSN.
+        system of aircraft stands                 Guide lines at Apron.
+                                                  Nose-in guidance at aircraft stands.
+                                                  See UBBL AD 2.24.3-1
+  2     RWY and TWY markings and LGT              RWY – 15/33: ID, THR, TDZ, RCL, side strips, aiming point markings.
+                                                  Lights: RWY edge, RWY end.
+                                                  RWY 33 – THR.
+                                                  TWYs: Center line markings, holding PSN.
+                                                  Lights: TWY A edge.
+  3     Stop bars                                 See UBBL AD 2.24.1-1
+  4     Remarks                                   NIL
+                                        UBBL AD 2.10 AERODROME OBSTACLES
+                                                   In approach/TKOF areas
+      RWY NR/Area affected               Obstacle type                 Coordinates                            Remarks
+                                           Elevation
+                                         Markings/LGT
+                a                              b                           c                                      d
+15/APCH                          Pole                          384925.2N                           NIL
+                                 Elev: 131 FT (40 M)           0484446.3E
+                                 Lighted
+                                 RED
+15/APCH                          Pole                          384913.1N                           NIL
+                                 Elev: 148 FT (45 M)           0484502.5E
+                                 Lighted
+                                 RED
+33/TKOF                          Pole                          384913.1N                           NIL
+                                 Elev: 148 FT (45 M)           0484502.5E
+                                 Lighted
+                                 RED
+33/TKOF                          Pole                          384925.2N                           NIL
+                                 Elev: 131 FT (40 M)           0484446.3E
+                                 Lighted
+                                 RED
+
+
+AIRAC AMDT 03/26                                                                                   State Civil Aviation Agency
+AIP                                                                                                                      AD 2 UBBL – 3
+AZERBAIJAN                                                                                                                 09 JUL 2026
+
+
+                                                    In circling area and at AD
+             Obstacle type                                  Coordinates                                    Remarks
+              Elevation
+             Markings/LGT
+                   a                                      b                                                    c
+Pole                                       384407.3N                          NIL
+Elev: 118 FT (36 M)                        0485147.7E
+Lighted
+RED
+Pole                                       384811.7N                          NIL
+Elev: 26 FT (8 M)                          0484937.8E
+Lighted
+RED
+Mountain                                   384502.8N                          NIL
+Elev: 1381 FT (421 M)                      0484508.1E
+Television aerial                          384553.3N                          NIL
+Elev: 367 FT (112 M)                       0485010.2E
+NOTE: Pilots are advised to consult latest NOTAM and AIP SUP on any other impending obstacle.
+                          UBBL AD 2.11 METEOROLOGICAL INFORMATION PROVIDED
+  1    Associated MET Office                         Lenkoran
+  2    Hours of service                              H24
+       MET Office outside hours
+  3    Office responsible for TAF preparation        Baku
+       Period of validity                            24 HR
+  4    Tred forecast                                 TR
+       Interval of issuance                          1.0 HR
+  5    Briefing/consultation provided                Personal consultation. Packet of documents.
+  6    Flight documentation                          Charts, OPMET
+       Language(s) used                              Eng, Aze, Rus
+  7    Charts and other information available        S, U 85, U 70, U 50, U 30, U 20, P 85, P 70, P 50, P 40, P 30, P 20, SWH, SWM, T.
+       for briefing or consultation                  MET SAT charts.
+  8    Supplementary equipment available for         AWOS, ATIS, AMHS, AFTN
+       providing information
+ 9     ATS units provided with information           Lenkoran TWR, Lenkoran APP, Lenkoran Briefing
+ 10    Additional information (limitation of         Area forecasts for low-level flights: GAMET and AIRMET (UBTT Zabrat
+       service, etc.)                                Met office is responsible for preparation and distribution of GAMET and
+                                                     AIRMET)
+                                UBBL AD 2.12 RUNWAY PHYSICAL CHARACTERISTICS
+                                                                                                     THR elevation and
+ Designations                                                                      THR coordinates
+                                        Dimensions              Strength (PCR)                       highest elevation of
+    RWY              TRUE BRG                                                    RWY end coordinates
+                                        of RWY (M)            and surface of RWY                      TDZ of precision
+     NR                                                                              THR GUND
+                                                                                                         APP RWY
+       1                  2                     3                      4                  5                   6
+                                                                                     384618.19N
+                                                                                    0484749.64E
+                                                              PCR 1557 F/A/W/U                          THR -52 FT
+      15               151.03            3300 x 45                                   384444.55N
+                                                                CONC_ASPH                               TDZ -52 FT
+                                                                                    0484855.80E
+                                                                                     13 FT (4 M)
+                                                                                     384444.55N
+                                                                                    0484855.80E
+                                                              PCR 1557 F/A/W/U                          THR -35 FT
+      33               331.03            3300 x 45                                   384618.19N
+                                                                CONC_ASPH                               TDZ -35 FT
+                                                                                    0484749.64E
+                                                                                    11 FT (3.5 M)
+  Slope of             SWY                 CWY                       Strip
+                                                                                 RESA dimensions (M)   OBST free zone
+RWY and SWY        dimensions (M)      dimensions (M)           dimensions (M)
+     7                   8                   9                        10                 11                   12
+For RWY 15:                                                                                            As specified in
+                        NIL              300 x 160                3240 x 150          150 x 90
+  +0.16%                                                                                                 Annex 14
+
+
+State Civil Aviation Agency                                                                                   AIRAC AMDT 03/26
+AD 2 UBBL – 4                                                                                                               AIP
+09 JUL 2026                                                                                                       AZERBAIJAN
+
+
+  Slope of             SWY                   CWY                 Strip
+                                                                                 RESA dimensions (M)      OBST free zone
+RWY and SWY        dimensions (M)        dimensions (M)      dimensions (M)
+      7                  8                     9                  10                      11                    12
+For RWY 33:                                                                                               As specified in
+                         NIL               300 x 160           3240 x 150              150 x 90
+   -0.16%                                                                                                   Annex 14
+                                         UBBL AD 2.13 DECLARED DISTANCES
+ RWY designator         TORA (M)            TODA (M)           ASDA (M)            LDA (M)                Remarks
+       1                   2                   3                  4                  5                       6
+      15                  3300                3600               3300               3300                    NIL
+      33                  3300                3600               3300               3300                    NIL
+                                  UBBL AD 2.14 APPROACH AND RUNWAY LIGHTING
+                                                                RWY           RWY edge
+                                                                                         RWY end   SWY
+           APCH LGT THR LGT VASIS                  TDZ,      centerline       LGT LEN,
+  RWY                                                                                      LGT   LGT LEN
+            type LEN colour (MEHT)                 LGT       LGT LEN,          Spacing,                  Remarks
+Designator                                                                                colour   (M)
+              INTST  WBAR    PAPI                  LEN        Spacing,         Colour,
+                                                                                          WBAR    colour
+                                                            Colour INTST        INTST
+       1           2              3        4         5           6                 7        8       9      10
+      15          NIL            NIL      NIL       NIL         NIL            3300 M      Red     NIL     NIL
+                                                                            spacing 60 M
+                                                                                white,
+                                                                             last 600 M
+                                                                                yellow
+                                                                                 LIH
+      33          CAT I      Green       PAPI       NIL          NIL           3300 M      Red     NIL     NIL
+                AEROKOM                  58 FT                              spacing 60 M
+                  900 M                                                         white,
+                   LIH                                                       last 600 M
+                                                                                yellow
+                                                                                 LIH
+                         UBBL AD 2.15 OTHER LIGHTING, SECONDARY POWER SUPPLY
+  1    ABN/IBN location, characteristics and      Nil
+       hours of operation
+  2    LDI location and LGT                       LDI: NIL
+       Anemometer location and LGT                Anemometer: NIL
+  3    TWY edge and centre line lighting          NIL
+  4    Secondary power supply/switch-over time    Secondary power supply to all lighting at AD. Switch-over time: 15 SEC
+  5    Remarks                                    NIL
+                                       UBBL AD 2.16 HELICOPTER LANDING AREA
+  1    Coordinates TLOF or THR of FATO            Nil
+       Geoid undulation
+  2    TLOF and/or FATO elevation M/FT            Nil
+  3    TLOF and FATO area dimensions,             Nil
+       surface, strength, marking
+  4    True BRG of FATO                           Nil
+  5    Declared distance available                Nil
+  6    APP and FATO lighting                      Nil
+  7    Remarks                                    Take off and landing of helicopters is cleared in any part of RWY 15/33
+                                             UBBL AD 2.17 ATS AIRSPACE
+  1    Designation and lateral limits             Lenkoran CTR
+                                                  Area bounded by joining points 390728N/0482318E then along the
+                                                  clockwise arc of a circle of 30NM radius centered on 384452N/0484845E
+                                                  (DME ILM); to 382212N/0491402E; 382630N/0485230E then along
+                                                  Azerbaijan-Iran (East) up to 382653N/0484935E; 384452N/0484845E to
+                                                  point of origin.
+  2    Vertical limits                            GND to FL80
+  3    Airspace classification                    NIL
+
+
+AIRAC AMDT 03/26                                                                               State Civil Aviation Agency
+AIP                                                                                                                 AD 2 UBBL – 5
+AZERBAIJAN                                                                                                            03 SEP 2026
+
+
+  4    ATS unit call sign                          Lenkoran Tower, English
+       Language(s)
+  5    Transition altitude                         2000 FT (610 M) MSL
+  6    Hours of applicability                      NIL
+  7    Remarks                                     NIL
+                                   UBBL AD 2.18 ATS COMMUNICATION FACILITIES
+   Service designation             Call sign               Frequency              Hours of operation             Remarks
+            1                         2                         3                         4                         5
+          ATIS                  Lenkoran ATIS             128.200 MHZ                   H24               Primary
+                                                          126.400 MHZ                                     Primary
+          TWR                   Lenkoran Tower                                          H24
+                                                          119.000 MHZ                                     Secondary
+                              UBBL AD 2.19 RADIO NAVIGATION AND LANDING AIDS
+   Type of aid        ID        Frequency     Hours of     Site of transmitting      Elevation of DME            Remarks
+   MAG VAR                                    operation   antenna coordinates      transmitting antenna
+ CAT of ILS/MLS
+        1              2             3            4               5                           6                     7
+      LLZ            ILM        109.90 MHZ       HO           384623.7N                       -              326° MAG, 201 M
+  ILS RWY 33                                                  0484745.7E                                       from THR 15
+      GP                        333.80 MHZ       HO           384451.9N                       -               3°, RDH 50 FT
+                                                              0484844.9E
+       DME           ILM         CH 36X          HO           384451.9N               100 FT (30 M)          Coverage 25 NM
+                                                              0484844.9E
+       NDB               L      740.00 KHZ       HO           384419.6N                       -              326° MAG, 897 M
+                                                              0484913.2E                                        to THR 33
+       MM            MM         75.00 MHZ        HO           384419.6N                       -                     -
+                                                              0484913.2E
+                                     UBBL AD 2.20 LOCAL TRAFFIC REGULATIONS
+1 RUN-UP PROCEDURE
+1.1 Run-up and full engine thrust are only permitted on a few numbers of stands or at specially assigned places.
+1.2 Permission for engine run-up shall be requested from “Lenkoran Tower” on FREQ 126.400 MHz. Stand number and
+intended engine power thrust should be indicated.
+
+2 PUSH BACK AND TOW PROCEDURES
+2.1 Clearance for push back or tow may only be requested if airplane is ready to carry out the maneuver.
+2.2 The clearance for push back or tow shall be requested from “Lenkoran Tower” on FREQ 126.400 MHz.
+2.3 Engines can be started before, during or after push back or tow as specified in instructions of “Lenkoran Tower”. The
+interphone or hand signal system shall be used for communication between signalman and crew.
+
+3 START – UP PROCEDURE
+3.1 All types of flights shall request clearance for engine start-up from “Lenkoran Tower” on FREQ 126.400 MHz.
+3.2 The parking position, QNH value and designator of latest received ATIS broadcast shall be reported in the initial call.
+
+4 TAXI PROCEDURES
+4.1 Unless otherwise instructed by “Lenkoran Tower”, the taxi routes published on chart UBBL AD 2.24.3-1 shall be followed.
+4.2 While taxiing, the crew shall observe the area in front of them and take measures to avoid collisions with aircraft, motor
+vehicles and other obstacles.
+4.3 Movement of aircraft on the apron is subject to prior permission from “Lenkoran Tower”. However, “Lenkoran Tower”
+only provides necessary information to maintain an orderly flow of traffic.
+4.4 The aircraft shall not enter or cross the runway without clearance from the “Lenkoran Tower”.
+4.5 Taxiing from the holding position to line-up and take-off shall be performed only after clearance given by “Lenkoran
+Tower”.
+
+5 PARKING POSITION FOR HELICOPTERS
+Helicopters are always directed to the parking positions by signalman.
+
+
+State Civil Aviation Agency                                                                                 AIRAC AMDT 04/26
+AD 2 UBBL – 6                                                                                                                 AIP
+16 APR 2026                                                                                                         AZERBAIJAN
+
+
+6 APRON, TAXIING IN WINTER CONDITIONS
+Taxiways in apron area are not equipped with lights indicating median strip. The taxing lines may be invisible because of
+snow.
+
+7 HELICOPTER FLIGHTS RESTRICTIONS
+Irregular public air transportation by helicopters is allowed only after obtainment of preliminary permission from Lenkoran
+airport administration.
+
+8 OTHER INFORMATION
+Isolated aircraft parking position is available and located at aircraft stand #3.
+
+                                    UBBL AD 2.21 NOISE ABATEMENT PROCEDURES
+There are no special noise abatement procedures established.
+Aircraft types ANTONOV 24, ANTONOV 26 and TUPOLEV 134 are not allowed to land and take off at Lenkoran
+International Airport due to noise abatement, except for ambulance, humanitar, emergency, search and rescue flights.
+
+                                            UBBL AD 2.22 FLIGHT PROCEDURES
+Procedures to be followed by arriving of departing aircraft are contained on the SID charts UBBL AD 2.24.7-1 through UBBL
+AD 2.24.7-7 and STAR chart UBBL AD 2.24.9-1 through UBBL AD 2.24.9-3.
+
+                                       UBBL AD 2.23 ADDITIONAL INFORMATION
+NIL
+
+                                UBBL AD 2.24 CHARTS RELATED TO AN AERODROME
+                    Aerodrome Chart ICAO                                                     UBBL AD 2.24.1-1
+ Aerodrome Ground Movement and Aircraft Parking Chart ICAO                                   UBBL AD 2.24.3-1
+          Aerodrome Obstacle Chart ICAO RWY 15/33                                            UBBL AD 2.24.4-1
+      Standard Departure Instrument Chart (SID) RWY 15                                       UBBL AD 2.24.7-1
+      Standard Departure Instrument Chart (SID) RWY 15                                       UBBL AD 2.24.7-3
+      Standard Departure Instrument Chart (SID) RWY 33                                       UBBL AD 2.24.7-5
+      Standard Departure Instrument Chart (SID) RWY 33                                       UBBL AD 2.24.7-7
+     Standard Arrival Instrument Chart (STAR) RWY 15/33                                      UBBL AD 2.24.9-1
+     Standard Arrival Instrument Chart (STAR) RWY 15/33                                      UBBL AD 2.24.9-3
+         Standard Approach Chart (ILS, DME) RWY 33                                           UBBL AD 2.24.10-1
+        Standard Approach Chart (NDB, DME) RWY 15                                            UBBL AD 2.24.10-3
+
+
+
+
+AIRAC AMDT 02/26                                                                                 State Civil Aviation Agency
+

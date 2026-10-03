@@ -19,6 +19,11 @@ class GeneratedOlsSurface(BaseModel):
     run_id: int
     run_dir_id: int | None
     generation_method: str
+    reference_geometry: str | None = None
+    topology_status: Literal["PASSED", "WARNING", "NOT_APPLICABLE"] = "NOT_APPLICABLE"
+    topology_message: str | None = None
+    gap_m: float | None = None
+    overlap_m: float | None = None
 
 
 class AutomaticOlsGenerationResponse(BaseModel):

@@ -5,6 +5,11 @@ export type GeneratedOlsSurface={
  run_id:number
  run_dir_id:number|null
  generation_method:string
+ reference_geometry:string|null
+ topology_status:'PASSED'|'WARNING'|'NOT_APPLICABLE'
+ topology_message:string|null
+ gap_m:number|null
+ overlap_m:number|null
 }
 
 export type AutomaticOlsResult={

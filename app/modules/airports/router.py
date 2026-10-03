@@ -86,9 +86,6 @@ async def update_airport(
 ) -> AirportResponse:
     del editor
     changes = payload.model_dump(exclude_unset=True)
-    for geometry_field in ("arp_geom", "boundary_geom"):
-        if changes.get(geometry_field) is not None:
-            changes[geometry_field] = changes[geometry_field].model_dump()
     try:
         return await AirportService(session).update_airport(air_id, changes)
     except (AirportNotFoundError, AirportConflictError, AirportValidationError) as exc:

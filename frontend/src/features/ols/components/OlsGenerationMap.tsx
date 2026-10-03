@@ -12,7 +12,7 @@ import {useMapExpansion} from '../../../shared/useMapExpansion'
 import type {Runway} from '../../runways/runways.types'
 
 type Props={runway:Runway|null;geojson:Record<string,unknown>|null;loading:boolean}
-const surfaceColors:Record<string,string>={INNER_HORIZONTAL:'#2785e8',CONICAL:'#75a823',APPROACH:'#ef5265',TAKEOFF_CLIMB:'#8b5cf6',TRANSITIONAL:'#f0b429',INNER_APPROACH:'#ec4899',INNER_TRANSITIONAL:'#14b8a6',BALKED_LANDING:'#f97316'}
+const surfaceColors:Record<string,string>={INNER_HORIZONTAL:'#2785e8',CONICAL:'#75a823',APPROACH:'#ef5265',TAKE_OFF_CLIMB:'#8b5cf6',TAKEOFF_CLIMB:'#8b5cf6',TRANSITIONAL:'#f0b429',INNER_APPROACH:'#ec4899',INNER_TRANSITIONAL:'#14b8a6',BALKED_LANDING:'#f97316'}
 
 export function OlsGenerationMap({runway,geojson,loading}:Props){
  const target=useRef<HTMLDivElement>(null),mapRef=useRef<Map|null>(null)

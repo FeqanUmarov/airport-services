@@ -158,11 +158,18 @@ async def main() -> None:
             code, updated = request_json(
                 f"/airports/{air_id}",
                 method="PATCH",
-                data={"eng_name": "Updated Test Airport", "elevation_m": "30.125"},
+                data={
+                    "eng_name": "Updated Test Airport",
+                    "elevation_m": "30.125",
+                    "arp_geom": payload["arp_geom"],
+                    "boundary_geom": payload["boundary_geom"],
+                },
                 bearer=admin_token,
             )
             assert code == 200 and updated is not None
             assert updated["eng_name"] == "Updated Test Airport"
+            assert updated["elevation_m"] == "30.125"
+            assert updated["arp_geom"] == payload["arp_geom"]
 
             code, changed = request_json(
                 f"/airports/{air_id}/status",

@@ -180,6 +180,27 @@ class OlsRepository:
         )
         return (await self.session.execute(statement)).one_or_none()
 
+    async def transitional_reference_boundary(
+        self, run_id: int, approach_geometries: list[Any]
+    ) -> str:
+        """Return the real 2D exterior boundary shared by Strip and Approaches."""
+        strip = await self.session.scalar(
+            select(RunwayStrip.GEOM).where(RunwayStrip.RUN_ID == run_id)
+        )
+        if strip is None:
+            raise ValueError("Active Runway Strip geometry is required")
+        reference = func.ST_Force2D(strip)
+        for approach in approach_geometries:
+            reference = func.ST_Union(reference, func.ST_Force2D(approach))
+        boundary = func.ST_Boundary(func.ST_UnaryUnion(reference))
+        # Keep enough coordinate precision for the generated lower edge to be
+        # numerically identical to the PostGIS reference boundary after its
+        # round-trip through Python/pyproj.
+        value = await self.session.scalar(select(func.ST_AsGeoJSON(boundary, 15)))
+        if value is None:
+            raise ValueError("Strip and Approach reference boundary is empty")
+        return str(value)
+
     async def aggregate_threshold_circles_3d(
         self,
         run_id: int,
@@ -253,6 +274,45 @@ class OlsRepository:
     async def geometry_is_valid(self, geometry: Any) -> tuple[bool, str]:
         row = (await self.session.execute(select(func.ST_IsValid(func.ST_Force2D(geometry)), func.ST_IsValidReason(func.ST_Force2D(geometry)), func.ST_IsEmpty(geometry)))).one()
         return bool(row[0]) and not bool(row[2]), str(row[1])
+
+    @staticmethod
+    def normalize_polygonal_geometry(geometry: Any) -> Any:
+        """Node self-crossing rings without buffering or changing references."""
+        valid = func.ST_MakeValid(
+            geometry,
+            "method=structure keepcollapsed=false",
+        )
+        return func.ST_Multi(func.ST_CollectionExtract(valid, 3))
+
+    @staticmethod
+    def remove_polygonal_overlap(geometry: Any, references: list[Any]) -> Any:
+        """Clip reference interiors while preserving shared topology boundaries."""
+        reference_union = func.ST_Force2D(references[0])
+        for reference in references[1:]:
+            reference_union = func.ST_Union(reference_union, func.ST_Force2D(reference))
+        clipped = func.ST_Difference(geometry, func.ST_UnaryUnion(reference_union))
+        return func.ST_Multi(func.ST_CollectionExtract(clipped, 3))
+
+    @staticmethod
+    def snap_polygon_to_reference(
+        geometry: Any,
+        reference: Any,
+        metric_srid: int,
+        tolerance_m: float,
+        reference_elevation_m: float,
+    ) -> Any:
+        """Remove projection-roundtrip noise using a documented metric tolerance."""
+        metric_geometry = func.ST_Transform(geometry, metric_srid)
+        metric_reference = func.ST_Transform(
+            func.ST_Translate(
+                func.ST_Force3D(reference), 0, 0, reference_elevation_m
+            ),
+            metric_srid,
+        )
+        return func.ST_Transform(
+            func.ST_Snap(metric_geometry, metric_reference, tolerance_m),
+            4326,
+        )
 
     def surface_details_statement(self):
         return (

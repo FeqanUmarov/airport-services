@@ -1,1 +1,0 @@
-import{Y as n}from"./index-D8xjqTyD.js";const o={ADMIN:["view","edit","manage"],EDITOR:["view","edit"],VIEWER:["view"]},r=(s,e)=>s.some(i=>o[i]?.includes(e)),t=s=>n(e=>r(e.user?.roles??[],s));function a({permission:s,children:e,fallback:i=null}){return t(s)?e:i}export{a as C,t as u};

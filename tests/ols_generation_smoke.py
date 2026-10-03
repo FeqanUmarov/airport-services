@@ -30,7 +30,10 @@ def login(username,password):
 
 def generate(token,standard_id,run_id,replace_existing=True):
     body=json.dumps({"standard_id":standard_id,"run_id":run_id,"replace_existing":replace_existing}).encode()
-    with urlopen(Request(BASE_URL+"/ols/generate",data=body,headers={"Content-Type":"application/json","Authorization":f"Bearer {token}"},method="POST"),timeout=30) as response: return response.status,json.loads(response.read())
+    try:
+        with urlopen(Request(BASE_URL+"/ols/generate",data=body,headers={"Content-Type":"application/json","Authorization":f"Bearer {token}"},method="POST"),timeout=30) as response: return response.status,json.loads(response.read())
+    except HTTPError as exc:
+        return exc.code,json.loads(exc.read())
 
 
 def call(path, method="GET", data=None, token=None):
@@ -71,7 +74,8 @@ async def main():
         country=Country(AZE_NAME="Test",ENG_NAME="Test",ISO_CODE=f"O{suffix[:5].upper()}",STATUS_ID=active); session.add(country); await session.flush(); city=City(COUNTRY_ID=country.COUNTRY_ID,AZE_NAME="Test",ENG_NAME=f"OLS City {suffix}",STATUS_ID=active); icao=IcaoCode(ICAO_CODE=f"O{suffix[:3].upper()}",DESCRIPTION="Test",STATUS_ID=active); session.add_all([city,icao]); await session.flush()
         airport=Airport(ICAO_ID=icao.ICAO_ID,IATA_CODE=None,AZE_NAME="Test",ENG_NAME="OLS Airport",COUNTRY_ID=country.COUNTRY_ID,CITY_ID=city.CITY_ID,ELEVATION_M=100,ARP_GEOM=func.ST_GeomFromText("POINT(49.9 40.4)",4326),BOUNDARY_GEOM=func.ST_GeomFromText("POLYGON((49.8 40.3,50 40.3,50 40.5,49.8 40.5,49.8 40.3))",4326),STATUS_ID=active); session.add(airport); await session.flush()
         runway=Runway(AIR_ID=airport.AIR_ID,AZE_NAME="09/27",ENG_NAME="09/27",DESIGNATOR_1="09",DESIGNATOR_2="27",LENGTH_M=3000,WIDTH_M=45,GEOM=func.ST_GeomFromText("POLYGON((49.88 40.395,49.92 40.395,49.92 40.405,49.88 40.405,49.88 40.395))",4326),CENTERLINE_GEOM=func.ST_GeomFromText("LINESTRING(49.88 40.4,49.92 40.4)",4326),STATUS_ID=active); session.add(runway); await session.flush()
-        strip=RunwayStrip(RUN_ID=runway.RUN_ID,LENGTH_M=3240,WIDTH_M=240,GEOM=func.ST_GeomFromText("POLYGON((49.878 40.399,49.922 40.399,49.922 40.401,49.878 40.401,49.878 40.399))",4326),STATUS_ID=active); session.add(strip)
+        strip_centerline=func.ST_GeomFromText("LINESTRING(49.88 40.4,49.92 40.4)",4326)
+        strip=RunwayStrip(RUN_ID=runway.RUN_ID,LENGTH_M=3240,WIDTH_M=240,GEOM=func.ST_Transform(func.ST_Buffer(func.ST_Transform(strip_centerline,32639),120,"endcap=square join=mitre"),4326),STATUS_ID=active); session.add(strip)
         directions=[RunwayDirection(RUN_ID=runway.RUN_ID,DESIGNATOR="09",TRUE_BEARING_DEG=90,THRESHOLD_ELEVATION_M=100,THRESHOLD_GEOM=func.ST_GeomFromText("POINT(49.88 40.4)",4326),SLOPE_PCT=0,STATUS_ID=active),RunwayDirection(RUN_ID=runway.RUN_ID,DESIGNATOR="27",TRUE_BEARING_DEG=270,THRESHOLD_ELEVATION_M=100,THRESHOLD_GEOM=func.ST_GeomFromText("POINT(49.92 40.4)",4326),SLOPE_PCT=0,STATUS_ID=active)]; session.add_all(directions)
         user=User(USERNAME=username,EMAIL=f"{username}@example.com",PASSWORD_HASH=hash_password(password),FIRST_NAME="OLS",LAST_NAME="Admin",STATUS_ID=active); session.add(user); await session.flush(); session.add(UserRole(USER_ID=user.USER_ID,ROLE_ID=admin_role)); await session.flush()
         obstacle_type=ObstacleType(CODE=f"TOWER_{suffix}",AZE_NAME="Qüllə",ENG_NAME="Tower",DESCRIPTION="Violation test",STATUS_ID=active); session.add(obstacle_type); await session.flush()
@@ -79,7 +83,7 @@ async def main():
         for code,surface_type in surface_types.items():
             item=StandardOlsSurface(STANDARD_ID=standard.STANDARD_ID,SURFACE_TYPE_ID=surface_type.SURFACE_TYPE_ID,DESCRIPTION=None,STATUS_ID=active); session.add(item); configs[code]=item
         await session.flush()
-        values={"INNER_HORIZONTAL":{0:{"HORIZONTAL_OFFSET":4000,"HEIGHT":45}},"CONICAL":{0:{"HORIZONTAL_WIDTH":2000,"HEIGHT":100,"SLOPE":5}},"APPROACH":{0:{"START_DISTANCE":60,"INNER_EDGE":280,"DIVERGENCE":15},1:{"LENGTH":3000,"SLOPE":2},2:{"LENGTH":3600,"SLOPE":2.5},3:{"LENGTH":8400,"SLOPE":0}},"TAKE_OFF_CLIMB":{0:{"CLEARWAY":240,"INNER_EDGE":180,"DIVERGENCE":12.5,"FINAL_WIDTH":1200,"LENGTH":15000,"SLOPE":2}},"TRANSITIONAL":{0:{"SLOPE":14.3}}}
+        values={"INNER_HORIZONTAL":{0:{"HORIZONTAL_OFFSET":4000,"HEIGHT":45}},"CONICAL":{0:{"HORIZONTAL_WIDTH":2000,"HEIGHT":100,"SLOPE":5}},"APPROACH":{0:{"START_DISTANCE":120,"INNER_EDGE":280,"DIVERGENCE":15},1:{"LENGTH":3000,"SLOPE":2},2:{"LENGTH":3600,"SLOPE":2.5},3:{"LENGTH":8400,"SLOPE":0}},"TAKE_OFF_CLIMB":{0:{"CLEARWAY":240,"INNER_EDGE":180,"DIVERGENCE":12.5,"FINAL_WIDTH":1200,"LENGTH":15000,"SLOPE":2}},"TRANSITIONAL":{0:{"SLOPE":14.285714}}}
         for surface_code,sections in values.items():
             for section,section_values in sections.items():
                 for parameter_code,value in section_values.items(): session.add(StandardOlsParameterValue(STANDARD_OLS_ID=configs[surface_code].STANDARD_OLS_ID,PARAMETER_ID=parameters[parameter_code].PARAMETER_ID,SECTION_NO=section,NUMERIC_VALUE=value,BOOLEAN_VALUE=None,DESCRIPTION=None,STATUS_ID=active))
@@ -87,8 +91,20 @@ async def main():
         ids={"user":user.USER_ID,"runway":runway.RUN_ID,"directions":[d.RUN_DIR_ID for d in directions],"airport":airport.AIR_ID,"city":city.CITY_ID,"country":country.COUNTRY_ID,"icao":icao.ICAO_ID,"standard":standard.STANDARD_ID,"standard_type":standard_type.STANDARD_TYPE_ID,"obstacle_type":obstacle_type.OBSTACLE_TYPE_ID,"configs":{code:item.STANDARD_OLS_ID for code,item in configs.items()},"units":[meter.UNIT_ID,percent.UNIT_ID],"parameters":created_parameter_ids,"surface_types":created_surface_type_ids}
         try:
             token=login(username,password)
-            status_code,result=generate(token,standard.STANDARD_ID,runway.RUN_ID); assert status_code==201 and result["generated_count"]==7
+            status_code,result=generate(token,standard.STANDARD_ID,runway.RUN_ID); assert status_code==201, result; assert result["generated_count"]==7
             count=await session.scalar(select(func.count(OlsSurface.OLS_SURFACE_ID)).where(OlsSurface.RUN_ID==runway.RUN_ID)); dimensions=await session.scalars(select(func.ST_NDims(OlsSurface.GEOM)).where(OlsSurface.RUN_ID==runway.RUN_ID)); validity=await session.scalars(select(func.ST_IsValid(OlsSurface.GEOM)).where(OlsSurface.RUN_ID==runway.RUN_ID)); assert count==7 and set(dimensions.all())=={3} and set(validity.all())=={True}
+            transitional_geom=await session.scalar(select(OlsSurface.GEOM).where(OlsSurface.STANDARD_OLS_ID==ids["configs"]["TRANSITIONAL"],OlsSurface.RUN_ID==runway.RUN_ID))
+            approach_union=await session.scalar(select(func.ST_UnaryUnion(func.ST_Collect(OlsSurface.GEOM))).where(OlsSurface.STANDARD_OLS_ID==ids["configs"]["APPROACH"],OlsSurface.RUN_ID==runway.RUN_ID))
+            strip_geom=await session.scalar(select(RunwayStrip.GEOM).where(RunwayStrip.RUN_ID==ids["runway"]))
+            strip_overlap=float(await session.scalar(select(func.ST_Area(func.ST_Transform(func.ST_Intersection(func.ST_Force2D(transitional_geom),func.ST_Force2D(strip_geom)),32639)))))
+            approach_overlap=float(await session.scalar(select(func.ST_Area(func.ST_Transform(func.ST_Intersection(func.ST_Force2D(transitional_geom),func.ST_Force2D(approach_union)),32639)))))
+            assert strip_overlap < 0.01 and approach_overlap < 0.01, {"strip_overlap_m2":strip_overlap,"approach_overlap_m2":approach_overlap}
+            approach_rows=(await session.scalars(select(OlsSurface.GEOM).where(OlsSurface.STANDARD_OLS_ID==ids["configs"]["APPROACH"],OlsSurface.RUN_ID==runway.RUN_ID))).all()
+            for approach_geom in approach_rows:
+                approach_strip_gap=float(await session.scalar(select(func.ST_Distance(func.ST_Transform(func.ST_Force2D(approach_geom),32639),func.ST_Transform(func.ST_Force2D(strip_geom),32639)))))
+                approach_strip_overlap=float(await session.scalar(select(func.ST_Area(func.ST_Intersection(func.ST_Transform(func.ST_Force2D(approach_geom),32639),func.ST_Transform(func.ST_Force2D(strip_geom),32639))))))
+                transitional_approach_gap=float(await session.scalar(select(func.ST_Distance(func.ST_Transform(func.ST_Force2D(transitional_geom),32639),func.ST_Transform(func.ST_Force2D(approach_geom),32639)))))
+                assert approach_strip_gap < 0.01 and approach_strip_overlap < 0.01 and transitional_approach_gap < 0.01, {"approach_strip_gap_m":approach_strip_gap,"approach_strip_overlap_m2":approach_strip_overlap,"transitional_approach_gap_m":transitional_approach_gap}
             first_direction = aliased(RunwayDirection)
             second_direction = aliased(RunwayDirection)
             threshold_distance = float(
